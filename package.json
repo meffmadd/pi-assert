@@ -1,0 +1,37 @@
+{
+  "name": "pi-assert",
+  "version": "0.1.0",
+  "description": "Shell-assertion guard for pi. Reads asserts.json to block tool calls that fail user-defined shell checks.",
+  "type": "module",
+  "main": "./pi-assert/index.ts",
+  "files": [
+    "pi-assert/",
+    "skills/",
+    "AGENTS.md"
+  ],
+  "keywords": [
+    "pi",
+    "guard",
+    "security",
+    "assert",
+    "shell"
+  ],
+  "license": "MIT",
+  "pi": {
+    "extensions": [
+      "./pi-assert/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "scripts": {
+    "test": "node --import tsx --test tests/*.test.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0"
+  }
+}
