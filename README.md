@@ -1,7 +1,6 @@
 # pi-assert
 
-Shell-assertion guard for **pi**. Define assertions in an `asserts.json` file
-and block tool calls that fail your shell checks.
+Define asserts for Pi hooks as shell one-liners in `asserts.json`. Any tool call that violates these invariants gets blocked.
 
 ## Quick Start
 
