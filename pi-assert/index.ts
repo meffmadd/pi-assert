@@ -23,6 +23,22 @@ export default function (pi: ExtensionAPI) {
   let activeAsserts: Set<string> = new Set();
 
   // -----------------------------------------------------------------------
+  // Status bar
+  // -----------------------------------------------------------------------
+  function updateStatus(ctx: ExtensionContext) {
+    if (asserts.length === 0) {
+      ctx.ui.setStatus("pi-assert", undefined);
+      return;
+    }
+    const theme = ctx.ui.theme;
+    const color = activeAsserts.size > 0 ? "accent" : "dim";
+    ctx.ui.setStatus(
+      "pi-assert",
+      theme.fg(color, `asserts: ${activeAsserts.size}/${asserts.length}`),
+    );
+  }
+
+  // -----------------------------------------------------------------------
   // Persistence helpers
   // -----------------------------------------------------------------------
   function persistState() {
@@ -61,6 +77,7 @@ export default function (pi: ExtensionAPI) {
     asserts = loadAsserts(ctx.cwd);
     restoreFromBranch(ctx);
 
+    updateStatus(ctx);
     if (asserts.length > 0) {
       ctx.ui.notify(
         `pi-assert: ${asserts.length} assert${asserts.length === 1 ? "" : "s"} loaded (${activeAsserts.size} active)`,
@@ -74,6 +91,7 @@ export default function (pi: ExtensionAPI) {
   // -----------------------------------------------------------------------
   pi.on("session_tree", (_event, ctx) => {
     restoreFromBranch(ctx);
+    updateStatus(ctx);
   });
 
   // -----------------------------------------------------------------------
@@ -125,6 +143,7 @@ export default function (pi: ExtensionAPI) {
               activeAsserts.delete(id);
             }
             persistState();
+            updateStatus(ctx);
             // Update the header
             tui.requestRender();
           },
