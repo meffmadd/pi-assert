@@ -1,2 +1,5 @@
 node_modules/
 .pi/
+*.md
+!AGENTS.md
+!README.md
