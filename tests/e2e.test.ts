@@ -44,10 +44,10 @@ async function runAsserts(
     if (!matchFilter(a.filter, event)) continue;
 
     const env = buildEnv(event, ctx);
-    const passed = await evaluateShell(a.shell, env, ctx.signal);
+    const result = await evaluateShell(a.shell, env, ctx.signal);
 
-    if (!passed) {
-      const reason = `pi-assert: "${a.name}" blocked ${event.toolName}`;
+    if (!result.passed) {
+      const reason = `pi-assert: assertion "${a.name}" rejected ${event.toolName} — \`${a.shell}\``;
       return { block: true, reason };
     }
   }
@@ -131,7 +131,7 @@ describe("e2e: orchestration", () => {
     };
     const block = await runAsserts(asserts, writeEvent, defaultCtx);
     assert.ok(block);
-    assert.strictEqual(block!.reason, 'pi-assert: "block-writes" blocked write');
+    assert.strictEqual(block!.reason, 'pi-assert: assertion "block-writes" rejected write — `false`');
 
     // edit → filter doesn't match → allowed
     const editEvent: ToolCallEvent = {
@@ -171,7 +171,7 @@ describe("e2e: orchestration", () => {
     const block = await runAsserts(asserts, readEvent, defaultCtx);
     assert.ok(block);
     // It's blocked by "block-all", not "allow-read"
-    assert.strictEqual(block!.reason, 'pi-assert: "block-all" blocked read');
+    assert.strictEqual(block!.reason, 'pi-assert: assertion "block-all" rejected read — `false`');
   });
 
   // 5.4 ── No filter → fires on every tool_call ────────────────────
@@ -195,7 +195,7 @@ describe("e2e: orchestration", () => {
       };
       const result = await runAsserts(asserts, event, defaultCtx);
       assert.ok(result, `${toolName} should be blocked`);
-      assert.strictEqual(result!.reason, `pi-assert: "block-everything" blocked ${toolName}`);
+      assert.strictEqual(result!.reason, `pi-assert: assertion "block-everything" rejected ${toolName} — \`false\``);
     }
   });
 
@@ -284,7 +284,80 @@ describe("e2e: orchestration", () => {
     assert.strictEqual(result, undefined);
   });
 
-  // 5.8 ── Signal propagation ──────────────────────────────────────
+  // 5.8 ── default-based activation ────────────────────────────────
+
+  it("only asserts with default:true are active for new sessions", async () => {
+    const cwd = setupConfig("e2e-defaults", {
+      "always-active": {
+        hook: "tool_call",
+        filter: { toolName: "write" },
+        shell: "false",
+        default: true,
+      },
+      "opt-in": {
+        hook: "tool_call",
+        filter: { toolName: "bash" },
+        shell: "false",
+        default: false,
+      },
+      "also-opt-in": {
+        hook: "tool_call",
+        filter: { toolName: "read" },
+        shell: "false",
+      },
+    });
+
+    const allAsserts = loadAsserts(cwd);
+    assert.strictEqual(allAsserts.length, 3);
+
+    // Simulate index.ts restoreFromBranch logic (no saved state branch):
+    // activeAsserts = new Set(asserts.filter(a => a.default).map(a => a.name))
+    const activeAsserts = new Set(
+      allAsserts.filter((a) => a.default).map((a) => a.name),
+    );
+
+    // Only "always-active" should be in the active set
+    assert.strictEqual(activeAsserts.size, 1);
+    assert.ok(activeAsserts.has("always-active"));
+    assert.ok(!activeAsserts.has("opt-in"));
+    assert.ok(!activeAsserts.has("also-opt-in"));
+
+    // Only active asserts should run — simulate the tool_call loop
+    const activeList = allAsserts.filter((a) => activeAsserts.has(a.name));
+    assert.strictEqual(activeList.length, 1);
+
+    const ctx: ExtensionContext = { cwd: "/tmp" };
+
+    // write → blocked by "always-active" (default: true)
+    const writeEvent: ToolCallEvent = {
+      toolName: "write",
+      toolCallId: "c10",
+      input: { path: "/f" },
+    };
+    const block = await runAsserts(activeList, writeEvent, ctx);
+    assert.ok(block);
+    assert.ok(block!.reason.includes("always-active"));
+
+    // bash → not blocked ("opt-in" has default: false, not in active set)
+    const bashEvent: ToolCallEvent = {
+      toolName: "bash",
+      toolCallId: "c11",
+      input: { command: "rm -rf /" },
+    };
+    const bashResult = await runAsserts(activeList, bashEvent, ctx);
+    assert.strictEqual(bashResult, undefined);
+
+    // read → not blocked ("also-opt-in" has no default, not in active set)
+    const readEvent: ToolCallEvent = {
+      toolName: "read",
+      toolCallId: "c12",
+      input: { path: "/etc/passwd" },
+    };
+    const readResult = await runAsserts(activeList, readEvent, ctx);
+    assert.strictEqual(readResult, undefined);
+  });
+
+  // 5.9 ── Signal propagation ──────────────────────────────────────
 
   it("ctx.signal aborts shell → blocked", async () => {
     const cwd = setupConfig("e2e-signal", {

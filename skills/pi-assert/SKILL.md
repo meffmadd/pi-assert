@@ -30,7 +30,8 @@ The file lives at `.pi/asserts.json` (project) or `~/.pi/asserts.json`
 |----------|----------|-------------|
 | `hook`   | yes      | Pi event name. Currently only `"tool_call"`. |
 | `filter` | no       | Key-value object matched against `{ toolName, ...event.input }`. If every key matches, the assert fires. Omitted → fires on every tool call. |
-| `shell`  | yes      | Shell command string. Pipes, redirects, `&&`, `||` all work — runs through a real shell. Exit 0 → allow; non-zero → block. |
+| `shell`   | yes      | Shell command string. Pipes, redirects, `&&`, `||` all work — runs through a real shell. Exit 0 → allow; non-zero → block. |
+| `default` | no       | If `true`, this assert is active by default for new sessions. Defaults to `false` (inactive until manually enabled via `/asserts`). |
 
 ## Environment Variables
 
@@ -125,6 +126,7 @@ The shell command receives these environment variables:
 ## Behavior
 
 1. Asserts are loaded from `.pi/asserts.json` at session start.
-2. On each `tool_call`, all matching asserts run FIFO (first non-passing assert blocks the tool).
-3. A block shows an error notification in the TUI.
-4. The `false` Unix command always exits 1 — use it for unconditional blocks.
+2. Only asserts with `"default": true` are active initially. Others must be enabled via `/asserts`. Once toggled, the selection persists across session restarts.
+3. On each `tool_call`, all active, matching asserts run FIFO (first non-passing assert blocks the tool).
+4. A block shows an error notification in the TUI.
+5. The `false` Unix command always exits 1 — use it for unconditional blocks.

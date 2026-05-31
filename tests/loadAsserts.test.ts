@@ -206,7 +206,82 @@ describe("loadAsserts", () => {
     assert.strictEqual(result[0].filter, undefined);
   });
 
-  // 1.9 ── Multiple valid asserts in one file ──────────────────────
+  // 1.9 ── default field: true ─────────────────────────────────────
+
+  it("default: true in JSON → Assert.default = true", () => {
+    clearGlobal();
+    makeProject("default-true", {
+      guard: {
+        hook: "tool_call",
+        shell: "false",
+        default: true,
+      },
+    });
+
+    const result = loadAsserts(join(tmpRoot, "default-true"));
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].name, "guard");
+    assert.strictEqual(result[0].default, true);
+  });
+
+  // 1.10 ── default field: false ────────────────────────────────────
+
+  it("default: false in JSON → Assert.default = false", () => {
+    clearGlobal();
+    makeProject("default-false", {
+      guard: {
+        hook: "tool_call",
+        shell: "false",
+        default: false,
+      },
+    });
+
+    const result = loadAsserts(join(tmpRoot, "default-false"));
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].name, "guard");
+    assert.strictEqual(result[0].default, false);
+  });
+
+  // 1.11 ── default omitted → false ─────────────────────────────────
+
+  it("default omitted → Assert.default = false", () => {
+    clearGlobal();
+    makeProject("default-omitted", {
+      guard: {
+        hook: "tool_call",
+        shell: "false",
+      },
+    });
+
+    const result = loadAsserts(join(tmpRoot, "default-omitted"));
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].default, false);
+  });
+
+  // 1.12 ── Mixed defaults ──────────────────────────────────────────
+
+  it("mixed defaults → each assert gets its own default value", () => {
+    clearGlobal();
+    makeProject("default-mixed", {
+      active: { hook: "tool_call", shell: "false", default: true },
+      inactive: { hook: "tool_call", shell: "true", default: false },
+      unspecified: { hook: "tool_call", shell: "true" },
+    });
+
+    const result = loadAsserts(join(tmpRoot, "default-mixed"));
+    assert.strictEqual(result.length, 3);
+
+    const active = result.find((a) => a.name === "active")!;
+    assert.strictEqual(active.default, true);
+
+    const inactive = result.find((a) => a.name === "inactive")!;
+    assert.strictEqual(inactive.default, false);
+
+    const unspecified = result.find((a) => a.name === "unspecified")!;
+    assert.strictEqual(unspecified.default, false);
+  });
+
+  // 1.13 ── Multiple valid asserts in one file ──────────────────────
 
   it("multiple valid asserts → all loaded", () => {
     clearGlobal();

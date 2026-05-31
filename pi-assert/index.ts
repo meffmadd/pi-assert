@@ -8,6 +8,7 @@ import {
   buildEnv,
   evaluateShell,
   type Assert,
+  type ShellResult,
 } from "./engine.js";
 
 // ---------------------------------------------------------------------------
@@ -48,8 +49,8 @@ export default function (pi: ExtensionAPI) {
       const allNames = new Set(asserts.map((a) => a.name));
       activeAsserts = new Set(saved.filter((n) => allNames.has(n)));
     } else {
-      // No saved state — enable all by default
-      activeAsserts = new Set(asserts.map((a) => a.name));
+      // No saved state — enable only asserts with default: true
+      activeAsserts = new Set(asserts.filter((a) => a.default).map((a) => a.name));
     }
   }
 
@@ -166,10 +167,10 @@ export default function (pi: ExtensionAPI) {
 
       // Build env and run the shell command
       const env = buildEnv(event, ctx);
-      const passed = await evaluateShell(assert.shell, env, ctx.signal);
+      const result: ShellResult = await evaluateShell(assert.shell, env, ctx.signal);
 
-      if (!passed) {
-        const reason = `pi-assert: "${assert.name}" blocked ${event.toolName}`;
+      if (!result.passed) {
+        const reason = `pi-assert: assertion "${assert.name}" rejected ${event.toolName} — \`${assert.shell}\``;
 
         if (ctx.hasUI) {
           ctx.ui.notify(reason, "error");

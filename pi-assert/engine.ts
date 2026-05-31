@@ -16,6 +16,8 @@ export interface Assert {
   filter?: Record<string, unknown>;
   /** Shell command string whose exit code decides pass/fail. */
   shell: string;
+  /** Whether this assert is active by default for new sessions (default false). */
+  default: boolean;
 }
 
 /** Raw shape of each value in asserts.json before we attach the key as name. */
@@ -23,6 +25,8 @@ interface AssertDefinition {
   hook: string;
   filter?: Record<string, unknown>;
   shell: string;
+  /** If true, this assert is active by default for new sessions. Defaults to false. */
+  default?: boolean;
 }
 
 /** Shape of an asserts.json file (top-level object). */
@@ -85,6 +89,7 @@ export function loadAsserts(cwd: string): Assert[] {
     hook: def.hook,
     filter: def.filter,
     shell: def.shell,
+    default: def.default ?? false,
   }));
 }
 
@@ -159,13 +164,18 @@ const DEFAULT_TIMEOUT_MS = 5_000;
  * real shell — just like pi's bash tool.  `"false"` is handled as a normal
  * command: the Unix `false` binary exits 1 → blocked.
  */
+export interface ShellResult {
+  passed: boolean;
+  code: number | null;
+}
+
 export function evaluateShell(
   shell: string,
   env: Record<string, string>,
   signal?: AbortSignal,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
-): Promise<boolean> {
-  return new Promise<boolean>((resolve, reject) => {
+): Promise<ShellResult> {
+  return new Promise<ShellResult>((resolve, reject) => {
     // Merge our env on top of process.env so the shell inherits PATH etc.
     const mergedEnv = { ...process.env, ...env };
 
@@ -179,21 +189,21 @@ export function evaluateShell(
     child.on("error", (err: NodeJS.ErrnoException) => {
       // If the user aborts (AbortError), treat it as a block.
       if (err.name === "AbortError" || (signal?.aborted ?? false)) {
-        resolve(false);
+        resolve({ passed: false, code: null });
         return;
       }
       if (err.killed) {
         // Timeout or signal killed the process → block.
-        resolve(false);
+        resolve({ passed: false, code: null });
         return;
       }
       // Other errors (e.g. shell binary not found) → block.
-      resolve(false);
+      resolve({ passed: false, code: null });
     });
 
     child.on("close", (code: number | null) => {
       // exit 0 → pass, everything else → block
-      resolve(code === 0);
+      resolve({ passed: code === 0, code });
     });
   });
 }
