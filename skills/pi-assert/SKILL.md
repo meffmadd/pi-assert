@@ -24,6 +24,24 @@ The file lives at `.pi/asserts.json` (project) or `~/.pi/asserts.json`
 }
 ```
 
+### $schema
+
+For editor autocompletion and validation, add a `"$schema"` key pointing to the
+raw GitHub URL (or a local path during development):
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/<user>/pi-assert/main/schema.json",
+  "my-assert": { ... }
+}
+```
+
+VS Code and other editors will then provide:
+- Autocomplete for `hook`, `filter`, `shell`, `default`
+- Red squiggles on typos, missing required fields, or unknown properties
+- Hover tooltips with field descriptions
+- Enum suggestions (`"tool_call"` for `hook`)
+
 ### Fields
 
 | Field    | Required | Description |
