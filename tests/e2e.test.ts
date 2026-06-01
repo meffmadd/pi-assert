@@ -44,6 +44,13 @@ async function runAsserts(
     if (!matchFilter(a.filter, event)) continue;
 
     const env = buildEnv(event, ctx);
+
+    // Precondition: if `when` is present and fails, skip this assert
+    if (a.when) {
+      const precondition = await evaluateShell(a.when, env, ctx.signal);
+      if (!precondition.passed) continue;
+    }
+
     const result = await evaluateShell(a.shell, env, ctx.signal);
 
     if (!result.passed) {
@@ -355,6 +362,196 @@ describe("e2e: orchestration", () => {
     };
     const readResult = await runAsserts(activeList, readEvent, ctx);
     assert.strictEqual(readResult, undefined);
+  });
+
+  // 5.10 ── when precondition: passes → main shell runs ─────────────
+
+  it("when passes → main shell runs and can block", async () => {
+    const cwd = setupConfig("e2e-when-pass", {
+      "conditional-guard": {
+        hook: "tool_call",
+        when: "true",
+        shell: "false",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+
+    const event: ToolCallEvent = {
+      toolName: "write",
+      toolCallId: "c13",
+      input: { path: "/f" },
+    };
+
+    // when passes (true), shell runs (false) → blocked
+    const result = await runAsserts(asserts, event, defaultCtx);
+    assert.ok(result);
+    assert.ok(result!.reason.includes("conditional-guard"));
+  });
+
+  it("when passes → main shell passes → allowed", async () => {
+    const cwd = setupConfig("e2e-when-both-pass", {
+      "always-ok": {
+        hook: "tool_call",
+        when: "true",
+        shell: "true",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+
+    const event: ToolCallEvent = {
+      toolName: "write",
+      toolCallId: "c14",
+      input: { path: "/f" },
+    };
+
+    // when passes, shell passes → allowed
+    const result = await runAsserts(asserts, event, defaultCtx);
+    assert.strictEqual(result, undefined);
+  });
+
+  // 5.11 ── when precondition: fails → assert skipped ───────────────
+
+  it("when fails → assert skipped entirely (no block)", async () => {
+    const cwd = setupConfig("e2e-when-fail", {
+      "only-for-write": {
+        hook: "tool_call",
+        when: '[ "$PI_TOOL_NAME" = write ]',
+        shell: "false",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+
+    // bash → when fails (PI_TOOL_NAME != write) → skipped, no block
+    const bashEvent: ToolCallEvent = {
+      toolName: "bash",
+      toolCallId: "c15",
+      input: { command: "rm -rf /" },
+    };
+    const bashResult = await runAsserts(asserts, bashEvent, defaultCtx);
+    assert.strictEqual(bashResult, undefined);
+
+    // write → when passes → shell fails → blocked
+    const writeEvent: ToolCallEvent = {
+      toolName: "write",
+      toolCallId: "c16",
+      input: { path: "/etc/hosts" },
+    };
+    const writeResult = await runAsserts(asserts, writeEvent, defaultCtx);
+    assert.ok(writeResult);
+    assert.ok(writeResult!.reason.includes("only-for-write"));
+  });
+
+  it("when fails → second assert still runs (fail-fast on main shell only)", async () => {
+    const cwd = setupConfig("e2e-when-fail-continue", {
+      "skip-on-bash": {
+        hook: "tool_call",
+        when: '[ "$PI_TOOL_NAME" = write ]',
+        shell: "false",
+      },
+      "block-all": {
+        hook: "tool_call",
+        shell: "false",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+
+    // bash → first assert: when fails → skipped
+    //         second assert: no when, shell fails → blocked
+    const bashEvent: ToolCallEvent = {
+      toolName: "bash",
+      toolCallId: "c17",
+      input: { command: "ls" },
+    };
+    const result = await runAsserts(asserts, bashEvent, defaultCtx);
+    assert.ok(result);
+    assert.ok(result!.reason.includes("block-all"));
+  });
+
+  // 5.12 ── when precondition: receives same env vars ────────────────
+
+  it("when receives the same env vars as shell", async () => {
+    const cwd = setupConfig("e2e-when-env", {
+      "expensive-check": {
+        hook: "tool_call",
+        when: '[ "$PI_TOOL_NAME" = write ] && [ -n "$PI_TOOL_INPUT" ]',
+        shell: "echo \"$PI_TOOL_INPUT\" | grep -q '\.env' && exit 1 || exit 0",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+
+    // bash → when fails (PI_TOOL_NAME != write) → skipped
+    const bashEvent: ToolCallEvent = {
+      toolName: "bash",
+      toolCallId: "c18",
+      input: { command: "cat .env" },
+    };
+    const bashResult = await runAsserts(asserts, bashEvent, defaultCtx);
+    assert.strictEqual(bashResult, undefined);
+
+    // write with safe path → when passes, shell passes → allowed
+    const safeWrite: ToolCallEvent = {
+      toolName: "write",
+      toolCallId: "c19",
+      input: { path: "/src/app.ts" },
+    };
+    const safeResult = await runAsserts(asserts, safeWrite, defaultCtx);
+    assert.strictEqual(safeResult, undefined);
+
+    // write with .env path → when passes, shell fails → blocked
+    const envWrite: ToolCallEvent = {
+      toolName: "write",
+      toolCallId: "c20",
+      input: { path: ".env" },
+    };
+    const envResult = await runAsserts(asserts, envWrite, defaultCtx);
+    assert.ok(envResult);
+    assert.ok(envResult!.reason.includes("expensive-check"));
+  });
+
+  // 5.13 ── filter and when → both must match before shell runs ──────
+
+  it("assert with filter and when → both must match before shell runs", async () => {
+    const cwd = setupConfig("e2e-filter-and-if", {
+      "guard-write-env": {
+        hook: "tool_call",
+        filter: { toolName: "write" },
+        when: "echo \"$PI_TOOL_INPUT\" | grep -q '\.env'",
+        shell: "false",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+
+    // bash → filter fails → skipped (never reaches when)
+    const bashEvent: ToolCallEvent = {
+      toolName: "bash",
+      toolCallId: "c24",
+      input: { command: "rm .env" },
+    };
+    assert.strictEqual(await runAsserts(asserts, bashEvent, defaultCtx), undefined);
+
+    // write to safe path → filter passes, when fails → skipped
+    const safeWrite: ToolCallEvent = {
+      toolName: "write",
+      toolCallId: "c25",
+      input: { path: "/src/app.ts" },
+    };
+    assert.strictEqual(await runAsserts(asserts, safeWrite, defaultCtx), undefined);
+
+    // write to .env → filter passes, when passes, shell fails → blocked
+    const envWrite: ToolCallEvent = {
+      toolName: "write",
+      toolCallId: "c26",
+      input: { path: ".env" },
+    };
+    const blocked = await runAsserts(asserts, envWrite, defaultCtx);
+    assert.ok(blocked);
+    assert.ok(blocked!.reason.includes("guard-write-env"));
   });
 
   // 5.9 ── Signal propagation ──────────────────────────────────────

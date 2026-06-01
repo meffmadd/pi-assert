@@ -14,6 +14,8 @@ export interface Assert {
   hook: string;
   /** Optional key-value filter matched against { toolName, ...event.input }. */
   filter?: Record<string, unknown>;
+  /** Optional precondition shell command. Only runs the main `shell` if this exits 0. */
+  when?: string;
   /** Shell command string whose exit code decides pass/fail. */
   shell: string;
   /** Whether this assert is active by default for new sessions (default false). */
@@ -24,6 +26,8 @@ export interface Assert {
 interface AssertDefinition {
   hook: string;
   filter?: Record<string, unknown>;
+  /** Optional precondition shell command. Only runs `shell` if this exits 0. */
+  when?: string;
   shell: string;
   /** If true, this assert is active by default for new sessions. Defaults to false. */
   default?: boolean;
@@ -88,6 +92,7 @@ export function loadAsserts(cwd: string): Assert[] {
     name,
     hook: def.hook,
     filter: def.filter,
+    when: def.when,
     shell: def.shell,
     default: def.default ?? false,
   }));

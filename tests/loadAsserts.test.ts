@@ -281,6 +281,58 @@ describe("loadAsserts", () => {
     assert.strictEqual(unspecified.default, false);
   });
 
+  // 1.14 ── when field (precondition) ───────────────────────────────
+
+  it("when field present → Assert.when is the string", () => {
+    clearGlobal();
+    makeProject("when-present", {
+      conditional: {
+        hook: "tool_call",
+        shell: "false",
+        when: '[ "$PI_TOOL_NAME" = write ]',
+      },
+    });
+
+    const result = loadAsserts(join(tmpRoot, "when-present"));
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].name, "conditional");
+    assert.strictEqual(result[0].when, '[ "$PI_TOOL_NAME" = write ]');
+    assert.strictEqual(result[0].shell, "false");
+  });
+
+  it("when field absent → Assert.when is undefined", () => {
+    clearGlobal();
+    makeProject("when-absent", {
+      simple: {
+        hook: "tool_call",
+        shell: "true",
+      },
+    });
+
+    const result = loadAsserts(join(tmpRoot, "when-absent"));
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].when, undefined);
+  });
+
+  it("when field alongside filter → both loaded", () => {
+    clearGlobal();
+    makeProject("when-with-filter", {
+      guarded: {
+        hook: "tool_call",
+        filter: { toolName: "bash" },
+        when: "true",
+        shell: "false",
+      },
+    });
+
+    const result = loadAsserts(join(tmpRoot, "when-with-filter"));
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].name, "guarded");
+    assert.deepStrictEqual(result[0].filter, { toolName: "bash" });
+    assert.strictEqual(result[0].when, "true");
+    assert.strictEqual(result[0].shell, "false");
+  });
+
   // 1.13 ── Multiple valid asserts in one file ──────────────────────
 
   it("multiple valid asserts → all loaded", () => {

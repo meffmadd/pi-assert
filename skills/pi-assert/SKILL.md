@@ -48,6 +48,7 @@ VS Code and other editors will then provide:
 |----------|----------|-------------|
 | `hook`   | yes      | Pi event name. Currently only `"tool_call"`. |
 | `filter` | no       | Key-value object matched against `{ toolName, ...event.input }`. If every key matches, the assert fires. Omitted → fires on every tool call. |
+| `when`   | no       | Optional precondition shell command. The main `shell` only runs when this exits 0. Use to skip expensive asserts when they don't apply (e.g., only check writes to `.env` if the working tree is dirty). |
 | `shell`   | yes      | Shell command string. Pipes, redirects, `&&`, `||` all work — runs through a real shell. Exit 0 → allow; non-zero → block. |
 | `default` | no       | If `true`, this assert is active by default for new sessions. Defaults to `false` (inactive until manually enabled via `/asserts`). |
 
@@ -70,6 +71,26 @@ The shell command receives these environment variables:
 4. Reload pi with `/reload` (or restart).
 
 ## Common Patterns
+
+### Conditional asserts with `when` (skip expensive checks)
+
+The `when` field is a precondition — when it fails, the assert is skipped entirely.
+Use it for **dynamic runtime conditions** that `filter` cannot express (dirty git
+state, file existence, environment checks, etc.):
+
+```json
+{
+  "block-write-when-dirty": {
+    "hook": "tool_call",
+    "filter": { "toolName": "write" },
+    "when": "git diff --quiet",
+    "shell": "false"
+  }
+}
+```
+
+Without `when`, every write would be blocked. With `when`, writes are blocked only
+when the working tree is dirty — a cheap shell check before the assert kicks in.
 
 ### Block all write tool calls (require edit instead)
 

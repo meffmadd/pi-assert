@@ -34,6 +34,10 @@
           "type": "string",
           "description": "Shell command whose exit code decides pass/fail. Exit 0 → allow; non-zero → block. Pipes, redirects, &&, || all work."
         },
+        "when": {
+          "type": "string",
+          "description": "Optional precondition shell command. The main shell only runs when this exits 0. Use for dynamic runtime conditions (dirty git state, file existence, etc.) that filter cannot express."
+        },
         "default": {
           "type": "boolean",
           "description": "If true, this assert is active by default for new sessions. Defaults to false.",

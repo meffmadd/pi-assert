@@ -17,6 +17,8 @@ fail user-defined shell checks.
 
 - Shell commands run through `child_process.exec` → pipes, redirects, `&&`, `||`
   all work via `/bin/sh`.
+- Optional `when` precondition shell runs first; main `shell` only executes if
+  `when` exits 0. Skip expensive asserts when they don't apply.
 - Default timeout of 5 seconds prevents hanging asserts.
 - First non-passing assert blocks the tool (fail-fast). Others don't run.
 - Project `.pi/asserts.json` overrides global `~/.pi/asserts.json` by key name.

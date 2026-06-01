@@ -184,8 +184,16 @@ export default function (pi: ExtensionAPI) {
       // Skip if filter doesn't match
       if (!matchFilter(assert.filter, event)) continue;
 
-      // Build env and run the shell command
+      // Build env shared by both `when` and `shell`
       const env = buildEnv(event, ctx);
+
+      // Run precondition if present — skip assert when it doesn't pass
+      if (assert.when) {
+        const precondition: ShellResult = await evaluateShell(assert.when, env, ctx.signal);
+        if (!precondition.passed) continue;
+      }
+
+      // Run the main shell command
       const result: ShellResult = await evaluateShell(assert.shell, env, ctx.signal);
 
       if (!result.passed) {
