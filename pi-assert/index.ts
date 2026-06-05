@@ -1,7 +1,22 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
-import { Container, type SettingItem, SettingsList } from "@earendil-works/pi-tui";
+import {
+  Container,
+  DynamicBorder,
+  SelectList,
+  type SelectItem,
+  type SettingItem,
+  SettingsList,
+  Spacer,
+  Text,
+} from "@earendil-works/pi-tui";
 
+import {
+  fetchRuleFiles,
+  fetchRuleFile,
+  installRule,
+  type RuleEntries,
+} from "./install.js";
 import {
   loadAsserts,
   matchFilter,
@@ -95,11 +110,197 @@ export default function (pi: ExtensionAPI) {
   });
 
   // -----------------------------------------------------------------------
+  // /asserts install — browse and install rules from GitHub
+  // -----------------------------------------------------------------------
+  async function installFlow(ctx: ExtensionContext): Promise<void> {
+    const repo = "meffmadd/pi-assert-rules";
+
+    // ── Step 1: fetch and pick a rule file ──
+    let files: Awaited<ReturnType<typeof fetchRuleFiles>>;
+    try {
+      files = await fetchRuleFiles(repo);
+    } catch (err) {
+      ctx.ui.notify(
+        `pi-assert: failed to fetch rule files — ${String(err)}`,
+        "error",
+      );
+      return;
+    }
+
+    if (files.length === 0) {
+      ctx.ui.notify("No rule files found in pi-assert-rules.", "info");
+      return;
+    }
+
+    const selectedFile = await ctx.ui.custom<string | null>(
+      (tui, theme, _kb, done) => {
+        const items: SelectItem[] = files.map((f) => ({
+          value: f.path,
+          label: f.name,
+        }));
+
+        const container = new Container();
+        container.addChild(
+          new DynamicBorder((s: string) => theme.fg("accent", s)),
+        );
+        container.addChild(
+          new Text(
+            theme.fg("accent", theme.bold("Rule Files (pi-assert-rules)")),
+            1,
+            0,
+          ),
+        );
+
+        const list = new SelectList(items, Math.min(items.length, 12), {
+          selectedPrefix: (t: string) => theme.fg("accent", t),
+          selectedText: (t: string) => theme.fg("accent", t),
+          description: (t: string) => theme.fg("muted", t),
+          scrollInfo: (t: string) => theme.fg("dim", t),
+          noMatch: (t: string) => theme.fg("warning", t),
+        });
+        list.onSelect = (item) => done(item.value);
+        list.onCancel = () => done(null);
+        container.addChild(list);
+
+        container.addChild(
+          new Text(
+            theme.fg("dim", "↑↓ navigate • enter open • esc cancel"),
+            1,
+            0,
+          ),
+        );
+        container.addChild(
+          new DynamicBorder((s: string) => theme.fg("accent", s)),
+        );
+
+        return {
+          render: (w: number) => container.render(w),
+          invalidate: () => container.invalidate(),
+          handleInput: (data: string) => {
+            list.handleInput(data);
+            tui.requestRender();
+          },
+        };
+      },
+    );
+
+    if (!selectedFile) return; // user cancelled
+
+    // ── Step 2: fetch and parse the file ──
+    let entries: RuleEntries;
+    try {
+      entries = await fetchRuleFile(repo, selectedFile);
+    } catch (err) {
+      ctx.ui.notify(
+        `pi-assert: failed to load rule file — ${String(err)}`,
+        "error",
+      );
+      return;
+    }
+
+    const entryNames = Object.keys(entries);
+    if (entryNames.length === 0) {
+      ctx.ui.notify("No valid asserts in this file.", "info");
+      return installFlow(ctx); // back to file picker
+    }
+
+    // ── Step 3: pick an assert to install ──
+    const selectedName = await ctx.ui.custom<string | null>(
+      (tui, theme, _kb, done) => {
+        const items: SelectItem[] = entryNames.map((name) => {
+          const e = entries[name]!;
+          return {
+            value: name,
+            label: name,
+            description: e.description,
+          };
+        });
+
+        const fileName = selectedFile
+          .replace(/^rules\//, "")
+          .replace(/\.json$/, "");
+
+        const container = new Container();
+        container.addChild(
+          new DynamicBorder((s: string) => theme.fg("accent", s)),
+        );
+        container.addChild(
+          new Text(theme.fg("accent", theme.bold(fileName)), 1, 0),
+        );
+
+        const list = new SelectList(items, Math.min(items.length, 12), {
+          selectedPrefix: (t: string) => theme.fg("accent", t),
+          selectedText: (t: string) => theme.fg("accent", t),
+          description: (t: string) => theme.fg("muted", t),
+          scrollInfo: (t: string) => theme.fg("dim", t),
+          noMatch: (t: string) => theme.fg("warning", t),
+        });
+        list.onSelect = (item) => done(item.value);
+        list.onCancel = () => done(null);
+        container.addChild(list);
+
+        container.addChild(
+          new Text(
+            theme.fg("dim", "↑↓ navigate • enter install • esc back"),
+            1,
+            0,
+          ),
+        );
+        container.addChild(
+          new DynamicBorder((s: string) => theme.fg("accent", s)),
+        );
+
+        return {
+          render: (w: number) => container.render(w),
+          invalidate: () => container.invalidate(),
+          handleInput: (data: string) => {
+            list.handleInput(data);
+            tui.requestRender();
+          },
+        };
+      },
+    );
+
+    if (!selectedName) return installFlow(ctx); // esc → back to file picker
+
+    // ── Step 4: install ──
+    const entry = entries[selectedName]!;
+    try {
+      installRule(ctx.cwd, selectedName, entry);
+
+      // Reload in-memory asserts so the new rule appears in /asserts
+      asserts = loadAsserts(ctx.cwd);
+      restoreFromBranch(ctx);
+      updateStatus(ctx);
+
+      ctx.ui.notify(
+        `pi-assert: installed "${selectedName}". Use /asserts to enable it.`,
+        "info",
+      );
+    } catch (err) {
+      ctx.ui.notify(
+        `pi-assert: failed to install "${selectedName}" — ${String(err)}`,
+        "error",
+      );
+      return;
+    }
+
+    // ── Step 5: back to file picker (install more from same file) ──
+    return installFlow(ctx);
+  }
+
+  // -----------------------------------------------------------------------
   // /asserts command — toggle asserts on/off via popup
   // -----------------------------------------------------------------------
   pi.registerCommand("asserts", {
-    description: "Activate / deactivate asserts",
-    handler: async (_args, ctx) => {
+    description: "Activate / deactivate asserts, or install from repo",
+    handler: async (args, ctx) => {
+      // Route subcommands
+      if (args[0] === "install") {
+        await installFlow(ctx);
+        return;
+      }
+
       // Refresh assert list in case reloaded without restart
       asserts = loadAsserts(ctx.cwd);
 
