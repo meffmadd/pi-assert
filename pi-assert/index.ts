@@ -302,6 +302,13 @@ export default function (pi: ExtensionAPI) {
       while (true) {
         asserts = loadAsserts(ctx.cwd);
 
+        // Prune any stale active entries that no longer exist in the file
+        const validNames = new Set(asserts.map((a) => a.name));
+        for (const name of activeAsserts) {
+          if (!validNames.has(name)) activeAsserts.delete(name);
+        }
+        updateStatus(ctx);
+
         const action = await ctx.ui.custom<string | null>(
           (tui, theme, _kb, done) => {
             const container = new Container();
