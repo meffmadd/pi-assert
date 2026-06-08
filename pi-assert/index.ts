@@ -1,13 +1,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import {
   Container,
-  DynamicBorder,
   SelectList,
   type SelectItem,
   type SettingItem,
   SettingsList,
-  Spacer,
   Text,
 } from "@earendil-works/pi-tui";
 
@@ -294,9 +292,16 @@ export default function (pi: ExtensionAPI) {
   // -----------------------------------------------------------------------
   pi.registerCommand("asserts", {
     description: "Activate / deactivate asserts, or install from repo",
+    getArgumentCompletions: (prefix: string) => {
+      const actions = [
+        { value: "install", label: "install — browse and install rules from pi-assert-rules" },
+      ];
+      const filtered = actions.filter((a) => a.value.startsWith(prefix));
+      return filtered.length > 0 ? filtered : null;
+    },
     handler: async (args, ctx) => {
       // Route subcommands
-      if (args[0] === "install") {
+      if (args === "install") {
         await installFlow(ctx);
         return;
       }
