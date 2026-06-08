@@ -2,6 +2,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { DynamicBorder, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import {
   Container,
+  matchesKey,
+  Key,
   SelectList,
   type SelectItem,
   type SettingItem,
@@ -288,91 +290,149 @@ export default function (pi: ExtensionAPI) {
   }
 
   // -----------------------------------------------------------------------
-  // /asserts command — toggle asserts on/off via popup
+  // /asserts command — toggle asserts on/off or install from repo
   // -----------------------------------------------------------------------
   pi.registerCommand("asserts", {
-    description: "Activate / deactivate asserts, or install from repo",
-    getArgumentCompletions: (prefix: string) => {
-      const actions = [
-        { value: "install", label: "install — browse and install rules from pi-assert-rules" },
-      ];
-      const filtered = actions.filter((a) => a.value.startsWith(prefix));
-      return filtered.length > 0 ? filtered : null;
-    },
-    handler: async (args, ctx) => {
-      // Route subcommands
-      if (args === "install") {
-        await installFlow(ctx);
-        return;
-      }
+    description: "Activate / deactivate asserts",
+    handler: async (_args, ctx) => {
+      // Loop: show toggle UI; if user requests install, run it and show
+      // the toggle UI again so the new rule appears immediately.
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        asserts = loadAsserts(ctx.cwd);
 
-      // Refresh assert list in case reloaded without restart
-      asserts = loadAsserts(ctx.cwd);
+        const action = await ctx.ui.custom<string | null>(
+          (tui, theme, _kb, done) => {
+            const container = new Container();
 
-      if (asserts.length === 0) {
-        ctx.ui.notify("pi-assert: No asserts defined in .pi/asserts.json", "info");
-        return;
-      }
+            // ── Asserts header ──
+            container.addChild(
+              new (class {
+                render(_width: number) {
+                  return [
+                    theme.fg("accent", theme.bold("Asserts")),
+                    theme.fg(
+                      "muted",
+                      `${activeAsserts.size}/${asserts.length} active`,
+                    ),
+                    "",
+                  ];
+                }
+                invalidate() {}
+              })(),
+            );
 
-      await ctx.ui.custom((tui, theme, _kb, done) => {
-        const items: SettingItem[] = asserts.map((a) => ({
-          id: a.name,
-          label: a.name,
-          currentValue: activeAsserts.has(a.name) ? "enabled" : "disabled",
-          values: ["enabled", "disabled"],
-        }));
-
-        const container = new Container();
-
-        // Header
-        container.addChild(
-          new (class {
-            render(_width: number) {
-              return [
-                theme.fg("accent", theme.bold("Asserts")),
-                theme.fg("muted", `${activeAsserts.size}/${asserts.length} active`),
-                "",
-              ];
+            // ── Settings list (or empty-state) ──
+            interface ListHandle {
+              handleInput(data: string): void;
+              invalidate(): void;
+              render(width: number): string[];
             }
-            invalidate() {}
-          })(),
-        );
+            let listHandle: ListHandle | undefined;
+            if (asserts.length > 0) {
+              const items: SettingItem[] = asserts.map((a) => ({
+                id: a.name,
+                label: a.name,
+                currentValue: activeAsserts.has(a.name)
+                  ? "enabled"
+                  : "disabled",
+                values: ["enabled", "disabled"],
+              }));
 
-        const settingsList = new SettingsList(
-          items,
-          Math.min(items.length + 3, 15),
-          getSettingsListTheme(),
-          (id, newValue) => {
-            if (newValue === "enabled") {
-              activeAsserts.add(id);
+              const rawList = new SettingsList(
+                items,
+                Math.min(items.length + 5, 15),
+                {
+                  ...getSettingsListTheme(),
+                  selectedPrefix: (t: string) =>
+                    theme.fg("accent", "> "),
+                  selectedText: (t: string) =>
+                    theme.fg("accent", t),
+                },
+                (id, newValue) => {
+                  if (newValue === "enabled") {
+                    activeAsserts.add(id);
+                  } else {
+                    activeAsserts.delete(id);
+                  }
+                  persistState();
+                  updateStatus(ctx);
+                  tui.requestRender();
+                },
+                () => done(null),
+              );
+
+              // Augment SettingsList's built-in hint with install option.
+              const wrapped = new (class {
+                render(width: number) {
+                  const lines = rawList.render(width);
+                  if (lines.length >= 2) {
+                    const last = lines[lines.length - 1];
+                    const prev = lines[lines.length - 2];
+                    if (
+                      prev === "" &&
+                      last.includes("Enter/Space to change")
+                    ) {
+                      // Inject install hint; re-dim the trailing segment
+                      // since theme.fg("dim", ...) emits a reset.
+                      const tail = theme.fg("dim", " · Esc to cancel");
+                      const augmented = last.replace(
+                        "· Esc to cancel",
+                        `· ${theme.fg("accent", "i")} ${theme.fg("dim", "Install asserts")}${tail}`,
+                      );
+                      lines[lines.length - 1] = augmented;
+                    }
+                  }
+                  return lines;
+                }
+                invalidate() {
+                  rawList.invalidate();
+                }
+                handleInput(data: string) {
+                  rawList.handleInput(data);
+                }
+              })();
+              listHandle = wrapped;
+              container.addChild(wrapped);
             } else {
-              activeAsserts.delete(id);
+              container.addChild(
+                new Text(
+                  theme.fg("dim", "No asserts defined."),
+                  1,
+                  0,
+                ),
+              );
             }
-            persistState();
-            updateStatus(ctx);
-            // Update the header
-            tui.requestRender();
+
+            return {
+              render(width: number) {
+                return container.render(width);
+              },
+              invalidate() {
+                container.invalidate();
+              },
+              handleInput(data: string) {
+                if (matchesKey(data, "i")) {
+                  done("install");
+                  return;
+                }
+                if (matchesKey(data, Key.escape)) {
+                  done(null);
+                  return;
+                }
+                listHandle?.handleInput?.(data);
+                tui.requestRender();
+              },
+            };
           },
-          () => done(undefined),
+          {},
         );
 
-        container.addChild(settingsList);
+        if (action !== "install") break;
 
-        const component = {
-          render(width: number) {
-            return container.render(width);
-          },
-          invalidate() {
-            container.invalidate();
-          },
-          handleInput(data: string) {
-            settingsList.handleInput?.(data);
-            tui.requestRender();
-          },
-        };
-
-        return component;
-      });
+        // Run install, then loop back to show the updated toggle UI
+        await installFlow(ctx);
+      }
     },
   });
 
