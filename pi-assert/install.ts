@@ -156,10 +156,21 @@ export function installRule(
   const clean: Record<string, unknown> = {
     hook: entry.hook,
     shell: entry.shell,
+    protected: false,
   };
   if (entry.filter !== undefined) clean.filter = entry.filter;
   if (entry.when !== undefined) clean.when = entry.when;
   if (entry.default !== undefined) clean.default = entry.default;
+
+  // Warn if overwriting an existing assert
+  if (current[name] !== undefined) {
+    const existing = current[name] as Record<string, unknown>;
+    if (existing.protected !== false) {
+      console.warn(
+        `pi-assert: overwriting user-defined assert "${name}" with installed version`,
+      );
+    }
+  }
 
   current[name] = clean;
 
@@ -170,4 +181,31 @@ export function installRule(
   }
 
   writeFileSync(projectPath, JSON.stringify(current, null, 2) + "\n", "utf-8");
+}
+
+/**
+ * Remove a named assert from the project's `.pi/asserts.json`.
+ * No-op if the assert doesn't exist.
+ */
+export function removeRule(
+  cwd: string,
+  name: string,
+): boolean {
+  const projectPath = join(cwd, ".pi", "asserts.json");
+
+  if (!existsSync(projectPath)) return false;
+
+  let current: Record<string, unknown>;
+  try {
+    const raw = readFileSync(projectPath, "utf-8");
+    current = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return false;
+  }
+
+  if (!(name in current)) return false;
+
+  delete current[name];
+  writeFileSync(projectPath, JSON.stringify(current, null, 2) + "\n", "utf-8");
+  return true;
 }

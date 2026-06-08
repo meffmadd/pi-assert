@@ -15,6 +15,7 @@ import {
   fetchRuleFiles,
   fetchRuleFile,
   installRule,
+  removeRule,
   type RuleEntries,
 } from "./install.js";
 import {
@@ -329,6 +330,9 @@ export default function (pi: ExtensionAPI) {
               render(width: number): string[];
             }
             let listHandle: ListHandle | undefined;
+            let confirmName: string | null = null;
+            let rawList: SettingsList | undefined;
+
             if (asserts.length > 0) {
               const items: SettingItem[] = asserts.map((a) => ({
                 id: a.name,
@@ -339,7 +343,7 @@ export default function (pi: ExtensionAPI) {
                 values: ["enabled", "disabled"],
               }));
 
-              const rawList = new SettingsList(
+              rawList = new SettingsList(
                 items,
                 Math.min(items.length + 5, 15),
                 {
@@ -362,9 +366,14 @@ export default function (pi: ExtensionAPI) {
                 () => done(null),
               );
 
-              // Augment SettingsList's built-in hint with install option.
+              // Wrap SettingsList to: augment hint, handle confirmation
               const wrapped = new (class {
                 render(width: number) {
+                  if (confirmName) {
+                    // Confirmation prompt replaces the list
+                    const msg = `Remove "${confirmName}"? ${theme.fg("accent", "y")}/${theme.fg("dim", "n")}`;
+                    return ["", `  ${msg}`, ""];
+                  }
                   const lines = rawList.render(width);
                   if (lines.length >= 2) {
                     const last = lines[lines.length - 1];
@@ -373,12 +382,10 @@ export default function (pi: ExtensionAPI) {
                       prev === "" &&
                       last.includes("Enter/Space to change")
                     ) {
-                      // Inject install hint; re-dim the trailing segment
-                      // since theme.fg("dim", ...) emits a reset.
                       const tail = theme.fg("dim", " · Esc to cancel");
                       const augmented = last.replace(
                         "· Esc to cancel",
-                        `· ${theme.fg("accent", "i")} ${theme.fg("dim", "Install asserts")}${tail}`,
+                        `· ${theme.fg("accent", "d")} ${theme.fg("dim", "Remove")} · ${theme.fg("accent", "i")} ${theme.fg("dim", "Install asserts")}${tail}`,
                       );
                       lines[lines.length - 1] = augmented;
                     }
@@ -412,6 +419,26 @@ export default function (pi: ExtensionAPI) {
                 container.invalidate();
               },
               handleInput(data: string) {
+                // ── Confirmation mode ──
+                if (confirmName) {
+                  if (matchesKey(data, "y")) {
+                    removeRule(ctx.cwd, confirmName);
+                    // Also remove from active set so stale entries don't linger
+                    activeAsserts.delete(confirmName);
+                    persistState();
+                    done("reload"); // close and reopen to reload from file
+                    return;
+                  }
+                  if (matchesKey(data, "n") || matchesKey(data, Key.escape)) {
+                    confirmName = null;
+                    container.invalidate();
+                    tui.requestRender();
+                    return;
+                  }
+                  return;
+                }
+
+                // ── Global hotkeys ──
                 if (matchesKey(data, "i")) {
                   done("install");
                   return;
@@ -420,6 +447,27 @@ export default function (pi: ExtensionAPI) {
                   done(null);
                   return;
                 }
+
+                // ── d: remove selected assert (if not protected) ──
+                if (matchesKey(data, "d")) {
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  const selIdx = (rawList as any)?.selectedIndex ?? -1;
+                  const selected = asserts[selIdx];
+                  if (selected && selected.protected !== false) {
+                    ctx.ui.notify(
+                      `"${selected.name}" is protected and cannot be removed`,
+                      "info",
+                    );
+                    return;
+                  }
+                  if (selected) {
+                    confirmName = selected.name;
+                    container.invalidate();
+                    tui.requestRender();
+                  }
+                  return;
+                }
+
                 listHandle?.handleInput?.(data);
                 tui.requestRender();
               },
@@ -428,10 +476,13 @@ export default function (pi: ExtensionAPI) {
           {},
         );
 
-        if (action !== "install") break;
+        if (action !== "install" && action !== "reload") break;
 
-        // Run install, then loop back to show the updated toggle UI
-        await installFlow(ctx);
+        if (action === "install") {
+          // Run install, then loop back to show the updated toggle UI
+          await installFlow(ctx);
+        }
+        // "reload" just loops back to reload from file
       }
     },
   });

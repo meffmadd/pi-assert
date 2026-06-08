@@ -20,6 +20,8 @@ export interface Assert {
   shell: string;
   /** Whether this assert is active by default for new sessions (default false). */
   default: boolean;
+  /** If true, this assert cannot be removed from the /asserts UI (default true). */
+  protected: boolean;
 }
 
 /** Raw shape of each value in asserts.json before we attach the key as name. */
@@ -31,6 +33,8 @@ interface AssertDefinition {
   shell: string;
   /** If true, this assert is active by default for new sessions. Defaults to false. */
   default?: boolean;
+  /** If true, this assert cannot be removed from the /asserts UI. Defaults to true. */
+  protected?: boolean;
 }
 
 /** Shape of an asserts.json file (top-level object). */
@@ -95,6 +99,7 @@ export function loadAsserts(cwd: string): Assert[] {
     when: def.when,
     shell: def.shell,
     default: def.default ?? false,
+    protected: def.protected ?? true,
   }));
 }
 

@@ -12,6 +12,7 @@ import {
   fetchRuleFiles,
   fetchRuleFile,
   installRule,
+  removeRule,
   type RuleEntries,
 } from "../pi-assert/install.js";
 
@@ -409,6 +410,7 @@ describe("installRule", () => {
       "my-rule": {
         hook: "tool_call",
         shell: "false",
+        protected: false,
       },
     });
   });
@@ -458,6 +460,7 @@ describe("installRule", () => {
       hook: "tool_call",
       filter: { toolName: "bash" },
       shell: "false",
+      protected: false,
     });
   });
 
@@ -482,6 +485,7 @@ describe("installRule", () => {
     assert.deepStrictEqual(parsed["my-rule"], {
       hook: "tool_call",
       shell: "new",
+      protected: false,
     });
   });
 
@@ -503,6 +507,7 @@ describe("installRule", () => {
     assert.deepStrictEqual(parsed["my-rule"], {
       hook: "tool_call",
       shell: "false",
+      protected: false,
     });
   });
 
@@ -521,7 +526,7 @@ describe("installRule", () => {
     const parsed = JSON.parse(raw);
     const keys = Object.keys(parsed["my-rule"]).sort();
 
-    assert.deepStrictEqual(keys, ["hook", "shell"]);
+    assert.deepStrictEqual(keys, ["hook", "protected", "shell"]);
   });
 
   // 3.7 ── Handles broken existing JSON ────────────────────────────
@@ -541,7 +546,7 @@ describe("installRule", () => {
     const parsed = JSON.parse(raw);
 
     assert.deepStrictEqual(parsed, {
-      "my-rule": { hook: "tool_call", shell: "true" },
+      "my-rule": { hook: "tool_call", shell: "true", protected: false },
     });
   });
 
@@ -614,7 +619,7 @@ describe("installRule", () => {
     const parsed = JSON.parse(raw);
     const keys = Object.keys(parsed["my-rule"]).sort();
 
-    assert.deepStrictEqual(keys, ["hook", "shell"]);
+    assert.deepStrictEqual(keys, ["hook", "protected", "shell"]);
   });
 
   // 3.12 ── Writes all optional fields together ────────────────────
@@ -635,11 +640,88 @@ describe("installRule", () => {
     const parsed = JSON.parse(raw);
     const keys = Object.keys(parsed["my-rule"]).sort();
 
-    assert.deepStrictEqual(keys, ["default", "filter", "hook", "shell", "when"]);
+    assert.deepStrictEqual(keys, ["default", "filter", "hook", "protected", "shell", "when"]);
     assert.strictEqual(parsed["my-rule"].default, true);
     assert.deepStrictEqual(parsed["my-rule"].filter, { toolName: "bash" });
     assert.strictEqual(parsed["my-rule"].hook, "tool_call");
     assert.strictEqual(parsed["my-rule"].shell, "false");
     assert.strictEqual(parsed["my-rule"].when, "true");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// removeRule
+// ═══════════════════════════════════════════════════════════════════
+
+describe("removeRule", () => {
+  // 4.1 ── Removes an existing assert ──────────────────────────────
+  it("removes an existing assert", () => {
+    const cwd = join(tmpRoot, "remove-existing");
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".pi", "asserts.json"),
+      JSON.stringify({
+        "keep-me": { hook: "tool_call", shell: "true" },
+        "drop-me": { hook: "tool_call", shell: "false" },
+      }),
+    );
+
+    const result = removeRule(cwd, "drop-me");
+    assert.strictEqual(result, true);
+
+    const raw = readFileSync(join(cwd, ".pi", "asserts.json"), "utf-8");
+    const parsed = JSON.parse(raw);
+
+    assert.strictEqual(Object.keys(parsed).length, 1);
+    assert.ok("keep-me" in parsed);
+    assert.strictEqual("drop-me" in parsed, false);
+  });
+
+  // 4.2 ── No-op when assert doesn't exist ─────────────────────────
+  it("returns false when assert not found", () => {
+    const cwd = join(tmpRoot, "remove-missing");
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".pi", "asserts.json"),
+      JSON.stringify({ "my-rule": { hook: "tool_call", shell: "true" } }),
+    );
+
+    const result = removeRule(cwd, "nonexistent");
+    assert.strictEqual(result, false);
+  });
+
+  // 4.3 ── Returns false when file doesn't exist ───────────────────
+  it("returns false when file missing", () => {
+    const result = removeRule(join(tmpRoot, "no-file"), "anything");
+    assert.strictEqual(result, false);
+  });
+
+  // 4.4 ── Handles broken JSON ────────────────────────────────────
+  it("returns false on broken JSON", () => {
+    const cwd = join(tmpRoot, "remove-broken");
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    writeFileSync(join(cwd, ".pi", "asserts.json"), "not json!!!");
+
+    const result = removeRule(cwd, "anything");
+    assert.strictEqual(result, false);
+  });
+
+  // 4.5 ── Removes last assert (file becomes empty object) ─────────
+  it("leaves empty object when removing last assert", () => {
+    const cwd = join(tmpRoot, "remove-last");
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".pi", "asserts.json"),
+      JSON.stringify({ "only-me": { hook: "tool_call", shell: "true" } }),
+    );
+
+    const result = removeRule(cwd, "only-me");
+    assert.strictEqual(result, true);
+
+    const raw = readFileSync(join(cwd, ".pi", "asserts.json"), "utf-8");
+    const parsed = JSON.parse(raw);
+
+    assert.strictEqual(typeof parsed, "object");
+    assert.strictEqual(Object.keys(parsed).length, 0);
   });
 });

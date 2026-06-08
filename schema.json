@@ -42,6 +42,11 @@
           "type": "boolean",
           "description": "If true, this assert is active by default for new sessions. Defaults to false.",
           "default": false
+        },
+        "protected": {
+          "type": "boolean",
+          "description": "If true, this assert cannot be removed from the /asserts UI. Defaults to true.",
+          "default": true
         }
       },
       "additionalProperties": false
