@@ -18,7 +18,7 @@ const env = { PI_TOOL_NAME: "bash" };
 // ═══════════════════════════════════════════════════════════════════
 
 describe("evaluateShell", () => {
-  // 4.1 ── Exit codes ──────────────────────────────────────────────
+  // ── Exit codes ──────────────────────────────────────────────────
 
   describe("exit codes", () => {
     const cases: [string, string, boolean][] = [
@@ -38,7 +38,7 @@ describe("evaluateShell", () => {
     }
   });
 
-  // 4.2 ── Shell features (pipes, redirects, chaining) ─────────────
+  // ── Shell features (pipes, redirects, chaining) ─────────────────
 
   describe("shell features", () => {
     const cases: [string, string, boolean][] = [
@@ -72,57 +72,31 @@ describe("evaluateShell", () => {
     }
   });
 
-  // 4.3 ── Environment variable access ─────────────────────────────
+  // ── Environment variable access ─────────────────────────────────
 
   describe("environment variable access", () => {
-    it("can read PI_TOOL_NAME from env", async () => {
-      // [ "$PI_TOOL_NAME" = bash ] → exit 0 if match
-      const result = await evaluateShell(
-        '[ "$PI_TOOL_NAME" = bash ]',
-        { PI_TOOL_NAME: "bash" },
-      );
-      assert.strictEqual(result.passed, true);
-    });
+    const cases: [string, string, Record<string, string>, boolean][] = [
+      ["can read PI_TOOL_NAME", '[ "$PI_TOOL_NAME" = bash ]', { PI_TOOL_NAME: "bash" }, true],
+      ["non-matching PI_TOOL_NAME → block", '[ "$PI_TOOL_NAME" = write ]', { PI_TOOL_NAME: "bash" }, false],
+      ["can grep PI_TOOL_INPUT", 'echo "$PI_TOOL_INPUT" | grep -q ls', { PI_TOOL_INPUT: '{"command":"ls -la"}' }, true],
+      ["grep mismatch on PI_TOOL_INPUT → block", 'echo "$PI_TOOL_INPUT" | grep -q missing', { PI_TOOL_INPUT: '{"command":"ls -la"}' }, false],
+      ["can read PI_CWD", '[ -n "$PI_CWD" ]', { PI_CWD: "/home/user/project" }, true],
+    ];
 
-    it("non-matching PI_TOOL_NAME → block", async () => {
-      const result = await evaluateShell(
-        '[ "$PI_TOOL_NAME" = write ]',
-        { PI_TOOL_NAME: "bash" },
-      );
-      assert.strictEqual(result.passed, false);
-    });
-
-    it("can grep PI_TOOL_INPUT", async () => {
-      const result = await evaluateShell(
-        'echo "$PI_TOOL_INPUT" | grep -q ls',
-        { PI_TOOL_INPUT: '{"command":"ls -la"}' },
-      );
-      assert.strictEqual(result.passed, true);
-    });
-
-    it("grep mismatch on PI_TOOL_INPUT → block", async () => {
-      const result = await evaluateShell(
-        'echo "$PI_TOOL_INPUT" | grep -q missing',
-        { PI_TOOL_INPUT: '{"command":"ls -la"}' },
-      );
-      assert.strictEqual(result.passed, false);
-    });
-
-    it("can read PI_CWD", async () => {
-      const result = await evaluateShell(
-        '[ -n "$PI_CWD" ]',
-        { PI_CWD: "/home/user/project" },
-      );
-      assert.strictEqual(result.passed, true);
-    });
+    for (const [label, shell, vars, expected] of cases) {
+      it(label, async () => {
+        const result = await evaluateShell(shell, vars);
+        assert.strictEqual(result.passed, expected);
+      });
+    }
   });
 
-  // 4.4 ── Signal cancellation ─────────────────────────────────────
+  // ── Signal cancellation ─────────────────────────────────────────
 
   describe("signal cancellation", () => {
     it("already-aborted signal → block (false)", async () => {
       const controller = new AbortController();
-      controller.abort(); // abort before passing
+      controller.abort();
 
       const result = await evaluateShell("true", env, controller.signal);
       assert.strictEqual(result.passed, false);
@@ -130,8 +104,6 @@ describe("evaluateShell", () => {
 
     it("aborted mid-execution → block (false)", async () => {
       const controller = new AbortController();
-
-      // Abort after a short delay while sleep is running
       setTimeout(() => controller.abort(), 50);
 
       const result = await evaluateShell("sleep 10", env, controller.signal, 5000);
@@ -139,67 +111,57 @@ describe("evaluateShell", () => {
     });
 
     it("no signal → normal exit code decides", async () => {
-      const result = await evaluateShell("true", env);
-      assert.strictEqual(result.passed, true);
-
-      const result2 = await evaluateShell("false", env);
-      assert.strictEqual(result2.passed, false);
+      assert.strictEqual((await evaluateShell("true", env)).passed, true);
+      assert.strictEqual((await evaluateShell("false", env)).passed, false);
     });
   });
 
-  // 4.5 ── Timeout ─────────────────────────────────────────────────
+  // ── Timeout ─────────────────────────────────────────────────────
 
   describe("timeout", () => {
-    it("command exceeds timeout → block (false)", async () => {
-      const result = await evaluateShell("sleep 10", env, undefined, 100);
-      assert.strictEqual(result.passed, false);
-    });
+    const cases: [string, string, number | undefined, boolean][] = [
+      ["command exceeds timeout → block", "sleep 10", 100, false],
+      ["command finishes before timeout → pass", "true", 100, true],
+      ["default timeout (5s) is enough for fast commands", "true", undefined, true],
+    ];
 
-    it("command finishes before timeout → pass", async () => {
-      const result = await evaluateShell("true", env, undefined, 100);
-      assert.strictEqual(result.passed, true);
-    });
-
-    it("default timeout is generous enough for fast commands", async () => {
-      // Default is 5000ms — "true" finishes instantly
-      const result = await evaluateShell("true", env);
-      assert.strictEqual(result.passed, true);
-    });
+    for (const [label, shell, timeoutMs, expected] of cases) {
+      it(label, async () => {
+        const result = await evaluateShell(shell, env, undefined, timeoutMs);
+        assert.strictEqual(result.passed, expected);
+      });
+    }
   });
 
-  // 4.6 ── Command not found / error paths ─────────────────────────
+  // ── Error paths ─────────────────────────────────────────────────
 
   describe("error paths", () => {
-    it("command not found → block (false)", async () => {
-      const result = await evaluateShell(
-        "non_existent_command_xyz_123",
-        env,
-      );
-      assert.strictEqual(result.passed, false);
-    });
+    const cases: [string, string, boolean][] = [
+      ["command not found → block", "non_existent_command_xyz_123", false],
+      ["syntax error in shell → block", "(", false],
+    ];
 
-    it("syntax error in shell → block (false)", async () => {
-      const result = await evaluateShell("(", env);
-      assert.strictEqual(result.passed, false);
-    });
+    for (const [label, shell, expected] of cases) {
+      it(label, async () => {
+        const result = await evaluateShell(shell, env);
+        assert.strictEqual(result.passed, expected);
+      });
+    }
   });
 
-  // 4.7 ── Env merges on top of process.env ────────────────────────
+  // ── Env merges on top of process.env ────────────────────────────
 
   describe("env merges on top of process.env", () => {
-    it("inherits PATH from process.env", async () => {
-      // `which true` should find /usr/bin/true or /bin/true
-      const result = await evaluateShell("which true > /dev/null", env);
-      assert.strictEqual(result.passed, true);
-    });
+    const cases: [string, string, Record<string, string>, boolean][] = [
+      ["inherits PATH from process.env", "which true > /dev/null", {}, true],
+      ["custom env overrides process.env for same key", '[ "$PI_TOOL_NAME" = custom_value ]', { PI_TOOL_NAME: "custom_value" }, true],
+    ];
 
-    it("custom env overrides process.env for same key", async () => {
-      // We set PI_TOOL_NAME to a custom value
-      const result = await evaluateShell(
-        '[ "$PI_TOOL_NAME" = custom_value ]',
-        { PI_TOOL_NAME: "custom_value" },
-      );
-      assert.strictEqual(result.passed, true);
-    });
+    for (const [label, shell, vars, expected] of cases) {
+      it(label, async () => {
+        const result = await evaluateShell(shell, vars);
+        assert.strictEqual(result.passed, expected);
+      });
+    }
   });
 });

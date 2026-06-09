@@ -31,242 +31,268 @@ describe("schema self-validation", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════
-// SKILL.md examples
+// validate(config) → boolean
 // ═══════════════════════════════════════════════════════════════════
 
-describe("SKILL.md examples", () => {
-  it("block all write tool calls", () => {
-    const cfg = {
-      local: {
-        unmodified: {
-          hook: "tool_call",
-          filter: { toolName: "write" },
-          shell: "false",
+describe("validate", () => {
+  // ── Cases: [label, config, expected: boolean] ────────────────────
+
+  type Case = [label: string, config: unknown, expected: boolean];
+
+  const cases: Case[] = [
+    // ── SKILL.md examples ──────────────────────────────────────────
+
+    [
+      "block all write tool calls",
+      {
+        local: {
+          unmodified: {
+            hook: "tool_call",
+            filter: { toolName: "write" },
+            shell: "false",
+          },
         },
       },
-    };
-    assert.ok(validate(cfg), ajv.errorsText(validate.errors));
-  });
+      true,
+    ],
 
-  it("guard specific file paths", () => {
-    const cfg = {
-      local: {
-        "protect-env-files": {
-          hook: "tool_call",
-          filter: { toolName: "write" },
-          shell:
-            'echo "$PI_TOOL_INPUT" | grep -q \'\\.env\' && exit 1 || exit 0',
+    [
+      "guard specific file paths",
+      {
+        local: {
+          "protect-env-files": {
+            hook: "tool_call",
+            filter: { toolName: "write" },
+            shell: 'echo "$PI_TOOL_INPUT" | grep -q \'\\.env\' && exit 1 || exit 0',
+          },
         },
       },
-    };
-    assert.ok(validate(cfg), ajv.errorsText(validate.errors));
-  });
+      true,
+    ],
 
-  it("no secrets in env", () => {
-    const cfg = {
-      local: {
-        "no-secrets-in-env": {
-          hook: "tool_call",
-          filter: { toolName: "bash" },
-          shell:
-            'grep -q SECRET_KEY <<< "$PI_TOOL_INPUT" && exit 1 || exit 0',
+    [
+      "no secrets in env",
+      {
+        local: {
+          "no-secrets-in-env": {
+            hook: "tool_call",
+            filter: { toolName: "bash" },
+            shell: 'grep -q SECRET_KEY <<< "$PI_TOOL_INPUT" && exit 1 || exit 0',
+          },
         },
       },
-    };
-    assert.ok(validate(cfg), ajv.errorsText(validate.errors));
-  });
+      true,
+    ],
 
-  it("block rm -rf", () => {
-    const cfg = {
-      local: {
-        "block-rm-rf": {
-          hook: "tool_call",
-          filter: { toolName: "bash" },
-          shell:
-            'grep -qE \'rm[[:space:]]+-rf\' <<< "$PI_TOOL_INPUT" && exit 1 || exit 0',
+    [
+      "block rm -rf",
+      {
+        local: {
+          "block-rm-rf": {
+            hook: "tool_call",
+            filter: { toolName: "bash" },
+            shell: 'grep -qE \'rm[[:space:]]+-rf\' <<< "$PI_TOOL_INPUT" && exit 1 || exit 0',
+          },
         },
       },
-    };
-    assert.ok(validate(cfg), ajv.errorsText(validate.errors));
-  });
+      true,
+    ],
 
-  it("write only in src", () => {
-    const cfg = {
-      local: {
-        "write-only-in-src": {
-          hook: "tool_call",
-          filter: { toolName: "write" },
-          shell:
-            'echo "$PI_TOOL_INPUT" | grep -q \'"path":"src/\' && exit 0 || exit 1',
+    [
+      "write only in src",
+      {
+        local: {
+          "write-only-in-src": {
+            hook: "tool_call",
+            filter: { toolName: "write" },
+            shell: 'echo "$PI_TOOL_INPUT" | grep -q \'"path":"src/\' && exit 0 || exit 1',
+          },
         },
       },
-    };
-    assert.ok(validate(cfg), ajv.errorsText(validate.errors));
-  });
+      true,
+    ],
 
-  it("no sensitive reads", () => {
-    const cfg = {
-      local: {
-        "no-sensitive-reads": {
-          hook: "tool_call",
-          filter: { toolName: "read" },
-          shell:
-            'echo "$PI_TOOL_INPUT" | grep -qE \'\\.(env|pem|key)\' && exit 1 || exit 0',
+    [
+      "no sensitive reads",
+      {
+        local: {
+          "no-sensitive-reads": {
+            hook: "tool_call",
+            filter: { toolName: "read" },
+            shell: 'echo "$PI_TOOL_INPUT" | grep -qE \'\\.(env|pem|key)\' && exit 1 || exit 0',
+          },
         },
       },
-    };
-    assert.ok(validate(cfg), ajv.errorsText(validate.errors));
-  });
+      true,
+    ],
 
-  it("default-based activation example", () => {
-    const cfg = {
-      local: {
-        "always-active": {
-          hook: "tool_call",
-          filter: { toolName: "write" },
-          shell: "false",
-          default: true,
-        },
-        "opt-in": {
-          hook: "tool_call",
-          filter: { toolName: "bash" },
-          shell: "false",
-          default: false,
-        },
-      },
-    };
-    assert.ok(validate(cfg), ajv.errorsText(validate.errors));
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════
-// Invalid configs
-// ═══════════════════════════════════════════════════════════════════
-
-describe("invalid configs rejected", () => {
-  it("missing required 'hook'", () => {
-    const cfg = { local: { bad: { shell: "true" } } };
-    assert.strictEqual(validate(cfg), false);
-  });
-
-  it("missing required 'shell'", () => {
-    const cfg = { local: { bad: { hook: "tool_call" } } };
-    assert.strictEqual(validate(cfg), false);
-  });
-
-  it("unknown property at assert level", () => {
-    const cfg = {
-      local: {
-        bad: {
-          hook: "tool_call",
-          shell: "true",
-          extraProp: "should not be here",
+    [
+      "default-based activation example",
+      {
+        local: {
+          "always-active": {
+            hook: "tool_call",
+            filter: { toolName: "write" },
+            shell: "false",
+            default: true,
+          },
+          "opt-in": {
+            hook: "tool_call",
+            filter: { toolName: "bash" },
+            shell: "false",
+            default: false,
+          },
         },
       },
-    };
-    assert.strictEqual(validate(cfg), false);
-  });
+      true,
+    ],
 
-  it("hook value not in enum", () => {
-    const cfg = { local: { bad: { hook: "invalid_hook", shell: "true" } } };
-    assert.strictEqual(validate(cfg), false);
-  });
+    // ── Invalid configs ────────────────────────────────────────────
 
-  it("default is not boolean", () => {
-    const cfg = {
-      local: { bad: { hook: "tool_call", shell: "true", default: "yes" } },
-    };
-    assert.strictEqual(validate(cfg), false);
-  });
+    [
+      "missing required 'hook'",
+      { local: { bad: { shell: "true" } } },
+      false,
+    ],
 
-  it("top-level is not an object", () => {
-    assert.strictEqual(validate([]), false);
-    assert.strictEqual(validate("string"), false);
-    assert.strictEqual(validate(null), false);
-  });
-});
+    [
+      "missing required 'shell'",
+      { local: { bad: { hook: "tool_call" } } },
+      false,
+    ],
 
-// ═══════════════════════════════════════════════════════════════════
-// Section-based validation
-// ═══════════════════════════════════════════════════════════════════
-
-describe("section-based validation", () => {
-  it("accepts local section with valid asserts", () => {
-    const cfg = {
-      local: { guard: { hook: "tool_call", shell: "true" } },
-    };
-    assert.ok(validate(cfg));
-  });
-
-  it("accepts repo section with valid asserts", () => {
-    const cfg = {
-      "meffmadd/pi-assert-rules": {
-        "block-write": { hook: "tool_call", shell: "false" },
+    [
+      "unknown property at assert level",
+      {
+        local: {
+          bad: {
+            hook: "tool_call",
+            shell: "true",
+            extraProp: "should not be here",
+          },
+        },
       },
-    };
-    assert.ok(validate(cfg));
-  });
+      false,
+    ],
 
-  it("accepts mixed local and repo sections", () => {
-    const cfg = {
-      local: { custom: { hook: "tool_call", shell: "true" } },
-      "some/repo": { installed: { hook: "tool_call", shell: "false" } },
-    };
-    assert.ok(validate(cfg));
-  });
+    [
+      "hook value not in enum",
+      { local: { bad: { hook: "invalid_hook", shell: "true" } } },
+      false,
+    ],
 
-  it("accepts $schema alongside sections", () => {
-    const cfg = {
-      $schema: "https://example.com/schema.json",
-      local: { guard: { hook: "tool_call", shell: "true" } },
-    };
-    assert.ok(validate(cfg));
-  });
-
-  it("accepts repos array with valid entries", () => {
-    const cfg = {
-      repos: ["meffmadd/pi-assert-rules"],
-      local: { guard: { hook: "tool_call", shell: "true" } },
-      "meffmadd/pi-assert-rules": {
-        block: { hook: "tool_call", shell: "false" },
+    [
+      "default is not boolean",
+      {
+        local: { bad: { hook: "tool_call", shell: "true", default: "yes" } },
       },
-    };
-    assert.ok(validate(cfg));
-  });
+      false,
+    ],
 
-  it("repos must be an array", () => {
-    const cfg = { repos: "not-an-array" };
-    assert.strictEqual(validate(cfg), false);
-  });
+    [
+      "top-level array rejected",
+      [],
+      false,
+    ],
 
-  it("repos entries must be owner/repo format", () => {
-    const cfg = { repos: ["no-slash"] };
-    assert.strictEqual(validate(cfg), false);
-  });
+    [
+      "top-level string rejected",
+      "string",
+      false,
+    ],
 
-  it("repos entries must be unique", () => {
-    const cfg = {
-      repos: ["a/b", "a/b"],
-    };
-    assert.strictEqual(validate(cfg), false);
-  });
-});
+    [
+      "top-level null rejected",
+      null,
+      false,
+    ],
 
-// ═══════════════════════════════════════════════════════════════════
-// Schema evolution — future hook values
-// ═══════════════════════════════════════════════════════════════════
+    // ── Section-based validation ───────────────────────────────────
 
-describe("schema evolution readiness", () => {
-  it("accepts only 'tool_call' for now", () => {
-    const cfg = {
-      local: { guard: { hook: "tool_call", shell: "true" } },
-    };
-    assert.ok(validate(cfg));
+    [
+      "accepts local section with valid asserts",
+      { local: { guard: { hook: "tool_call", shell: "true" } } },
+      true,
+    ],
 
-    // But 'tool_result' is not yet in the enum
-    const future = {
-      local: { guard: { hook: "tool_result", shell: "true" } },
-    };
-    assert.strictEqual(validate(future), false);
-  });
+    [
+      "accepts repo section with valid asserts",
+      {
+        "meffmadd/pi-assert-rules": {
+          "block-write": { hook: "tool_call", shell: "false" },
+        },
+      },
+      true,
+    ],
+
+    [
+      "accepts mixed local and repo sections",
+      {
+        local: { custom: { hook: "tool_call", shell: "true" } },
+        "some/repo": { installed: { hook: "tool_call", shell: "false" } },
+      },
+      true,
+    ],
+
+    [
+      "accepts $schema alongside sections",
+      {
+        $schema: "https://example.com/schema.json",
+        local: { guard: { hook: "tool_call", shell: "true" } },
+      },
+      true,
+    ],
+
+    [
+      "accepts repos array with valid entries",
+      {
+        repos: ["meffmadd/pi-assert-rules"],
+        local: { guard: { hook: "tool_call", shell: "true" } },
+        "meffmadd/pi-assert-rules": {
+          block: { hook: "tool_call", shell: "false" },
+        },
+      },
+      true,
+    ],
+
+    [
+      "repos must be an array",
+      { repos: "not-an-array" },
+      false,
+    ],
+
+    [
+      "repos entries must be owner/repo format",
+      { repos: ["no-slash"] },
+      false,
+    ],
+
+    [
+      "repos entries must be unique",
+      { repos: ["a/b", "a/b"] },
+      false,
+    ],
+
+    // ── Schema evolution ───────────────────────────────────────────
+
+    [
+      "accepts 'tool_call' as hook",
+      { local: { guard: { hook: "tool_call", shell: "true" } } },
+      true,
+    ],
+
+    [
+      "rejects 'tool_result' as hook (not yet in enum)",
+      { local: { guard: { hook: "tool_result", shell: "true" } } },
+      false,
+    ],
+  ];
+
+  // ── Run cases ────────────────────────────────────────────────────
+
+  for (const [label, config, expected] of cases) {
+    it(label, () => {
+      assert.strictEqual(validate(config), expected);
+    });
+  }
 });

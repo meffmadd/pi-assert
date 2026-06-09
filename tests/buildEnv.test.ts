@@ -18,24 +18,7 @@ const ctx: ExtensionContext = { cwd: "/home/user/project" };
 // ═══════════════════════════════════════════════════════════════════
 
 describe("buildEnv", () => {
-  // 3.1 ── All four variables present ──────────────────────────────
-
-  it("all four variables present with correct values", () => {
-    const event: ToolCallEvent = {
-      toolName: "bash",
-      toolCallId: "call-abc-123",
-      input: { command: "ls -la", timeout: 10 },
-    };
-
-    const env = buildEnv(event, ctx);
-
-    assert.strictEqual(env.PI_TOOL_NAME, "bash");
-    assert.strictEqual(env.PI_TOOL_CALL_ID, "call-abc-123");
-    assert.strictEqual(env.PI_TOOL_INPUT, '{"command":"ls -la","timeout":10}');
-    assert.strictEqual(env.PI_CWD, "/home/user/project");
-  });
-
-  // 3.2 ── Various tool types ──────────────────────────────────────
+  // ── Various tool types ─────────────────────────────────────────
 
   describe("various tool types", () => {
     const cases: [string, string, Record<string, unknown>, string][] = [
@@ -99,6 +82,8 @@ describe("buildEnv", () => {
       ["boolean value", { force: true }, '{"force":true}'],
       ["number value", { count: 0 }, '{"count":0}'],
       ["array value", { items: [1, 2, 3] }, '{"items":[1,2,3]}'],
+      ["newline escapes (no literal \n in JSON)", { command: "echo 'hello\nworld'" }, '{"command":"echo \'hello\\nworld\'"}'],
+      ["special characters → escaped", { command: 'echo "double" and \'single\' and \\ backslash' }, '{"command":"echo \\"double\\" and \'single\' and \\\\ backslash"}'],
     ];
 
     for (const [label, input, expectedInput] of cases) {
@@ -138,32 +123,4 @@ describe("buildEnv", () => {
     }
   });
 
-  // 3.5 ── PI_TOOL_INPUT is a single-line JSON string ──────────────
-
-  it("PI_TOOL_INPUT is always single-line (no pretty-print)", () => {
-    const event: ToolCallEvent = {
-      toolName: "bash",
-      toolCallId: "c",
-      input: { command: "echo 'hello\nworld'" },
-    };
-
-    const env = buildEnv(event, ctx);
-    // Should NOT contain newlines
-    assert.strictEqual(env.PI_TOOL_INPUT.includes("\n"), false);
-  });
-
-  // 3.6 ── Special characters in input values ──────────────────────
-
-  it("special characters are escaped in JSON", () => {
-    const event: ToolCallEvent = {
-      toolName: "bash",
-      toolCallId: "c",
-      input: { command: 'echo "double" and \'single\' and \\ backslash' },
-    };
-
-    const env = buildEnv(event, ctx);
-    // JSON.stringify handles escaping
-    assert.ok(env.PI_TOOL_INPUT.includes('\\"'));
-    assert.ok(env.PI_TOOL_INPUT.includes("\\\\"));
-  });
 });

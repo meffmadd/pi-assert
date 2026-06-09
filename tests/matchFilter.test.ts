@@ -38,12 +38,18 @@ const emptyInput: ToolCallEvent = {
   input: {},
 };
 
+const numEvent: ToolCallEvent = {
+  toolName: "bash",
+  toolCallId: "call-num",
+  input: { count: 0, threshold: 0.5, flag: false, name: null as any },
+};
+
 // ═══════════════════════════════════════════════════════════════════
 // matchFilter
 // ═══════════════════════════════════════════════════════════════════
 
 describe("matchFilter", () => {
-  // 2.1 ── No filter (always matches) ──────────────────────────────
+  // ── No filter (always matches) ──────────────────────────────────
 
   describe("no filter → always true", () => {
     const cases: [string, Record<string, unknown> | undefined][] = [
@@ -61,7 +67,7 @@ describe("matchFilter", () => {
     }
   });
 
-  // 2.2 ── Positive matches ────────────────────────────────────────
+  // ── Positive matches ────────────────────────────────────────────
 
   describe("positive matches (all filter keys present & equal)", () => {
     const cases: [string, Record<string, unknown>, ToolCallEvent][] = [
@@ -82,7 +88,7 @@ describe("matchFilter", () => {
     }
   });
 
-  // 2.3 ── Negative matches ────────────────────────────────────────
+  // ── Negative matches ────────────────────────────────────────────
 
   describe("negative matches (key present but value differs)", () => {
     const cases: [string, Record<string, unknown>, ToolCallEvent][] = [
@@ -102,7 +108,7 @@ describe("matchFilter", () => {
     }
   });
 
-  // 2.4 ── Key not in candidate ────────────────────────────────────
+  // ── Key not in candidate → false ────────────────────────────────
 
   describe("key not in candidate → false", () => {
     const cases: [string, Record<string, unknown>, ToolCallEvent][] = [
@@ -118,75 +124,51 @@ describe("matchFilter", () => {
     }
   });
 
-  // 2.5 ── Type coercion (v1 uses strict ===) ──────────────────────
+  // ── Type coercion (v1 uses strict ===) ──────────────────────────
 
   describe("type coercion — v1 uses strict ===", () => {
-    const numEvent: ToolCallEvent = {
-      toolName: "bash",
-      toolCallId: "call-num",
-      input: { count: 0, threshold: 0.5, flag: false, name: null as any },
+    const evtWithUndefined: ToolCallEvent = {
+      toolName: "test",
+      toolCallId: "c",
+      input: { present: undefined as any },
     };
 
-    const cases: [string, Record<string, unknown>, boolean][] = [
-      ['string "10" ≠ number 10', { timeout: "10" }, false],
-      ["number 0 = number 0", { count: 0 }, true],
-      ["boolean false = boolean false", { flag: false }, true],
-      ["null = null", { name: null }, true],
-      ["number mismatched against boolean", { count: false as any }, false],
+    const cases: [string, Record<string, unknown>, ToolCallEvent, boolean][] = [
+      ['string "10" ≠ number 10', { timeout: "10" }, bashEvent, false],
+      ["number 0 = number 0", { count: 0 }, numEvent, true],
+      ["boolean false = boolean false", { flag: false }, numEvent, true],
+      ["null = null", { name: null }, numEvent, true],
+      ["number mismatched against boolean", { count: false as any }, numEvent, false],
+      ["undefined present in candidate → matches", { present: undefined as any }, evtWithUndefined, true],
+      ["undefined absent from candidate → also matches", { absent: undefined as any }, evtWithUndefined, true],
     ];
 
-    for (const [label, filter, expected] of cases) {
+    for (const [label, filter, event, expected] of cases) {
       it(label, () => {
-        const event = label.startsWith("string") ? bashEvent : numEvent;
         assert.strictEqual(matchFilter(filter, event), expected);
       });
     }
-
-    // undefined check: candidate[key] on absent key returns undefined,
-    // which is never === to any value (including undefined itself via filter JSON)
-    it("undefined ≠ undefined (key absent from candidate)", () => {
-      // Even if the filter has `{ missing: undefined }` it won't match
-      // because candidate["missing"] returns undefined, and
-      // undefined !== undefined ... wait, actually undefined === undefined.
-      // But in JSON there's no undefined. Let's just note:
-      // a filter can't express undefined since JSON has no undefined.
-      // If someone passes undefined programmatically, it would be ===
-      // only if the candidate also has that key set to undefined.
-      const evt: ToolCallEvent = {
-        toolName: "test",
-        toolCallId: "c",
-        input: { present: undefined as any },
-      };
-      // candidate.present === undefined → true
-      assert.strictEqual(matchFilter({ present: undefined as any }, evt), true);
-      // candidate.absent === undefined → also true!
-      assert.strictEqual(matchFilter({ absent: undefined as any }, evt), true);
-    });
   });
 
-  // 2.6 ── Filter with nested objects (v1: exact reference match) ──
+  // ── Nested objects — exact reference match ──────────────────────
 
   describe("nested objects — exact reference match", () => {
-    it("same object reference matches", () => {
-      const edits = [{ oldText: "a", newText: "b" }];
-      const evt: ToolCallEvent = {
-        toolName: "edit",
-        toolCallId: "c",
-        input: { edits },
-      };
-      assert.strictEqual(matchFilter({ edits }, evt), true);
-    });
+    const edits = [{ oldText: "a", newText: "b" }];
+    const evtWithEdits: ToolCallEvent = {
+      toolName: "edit",
+      toolCallId: "c",
+      input: { edits },
+    };
 
-    it("different but deep-equal object does NOT match (===)", () => {
-      const evt: ToolCallEvent = {
-        toolName: "edit",
-        toolCallId: "c",
-        input: { edits: [{ oldText: "a", newText: "b" }] },
-      };
-      assert.strictEqual(
-        matchFilter({ edits: [{ oldText: "a", newText: "b" }] }, evt),
-        false,
-      );
-    });
+    const cases: [string, Record<string, unknown>, ToolCallEvent, boolean][] = [
+      ["same object reference matches", { edits }, evtWithEdits, true],
+      ["different but deep-equal does NOT match (===)", { edits: [{ oldText: "a", newText: "b" }] }, editEvent, false],
+    ];
+
+    for (const [label, filter, event, expected] of cases) {
+      it(label, () => {
+        assert.strictEqual(matchFilter(filter, event), expected);
+      });
+    }
   });
 });
