@@ -10,6 +10,8 @@ import { homedir } from "node:os";
 export interface Assert {
   /** Unique name of this assert. */
   name: string;
+  /** Source section: "local" or a repo key like "owner/repo". */
+  source: string;
   /** Pi event name to intercept (e.g. "tool_call"). */
   hook: string;
   /** Optional key-value filter matched against { toolName, ...event.input }. */
@@ -20,11 +22,9 @@ export interface Assert {
   shell: string;
   /** Whether this assert is active by default for new sessions (default false). */
   default: boolean;
-  /** If true, this assert cannot be removed from the /asserts UI (default true). */
-  protected: boolean;
 }
 
-/** Raw shape of each value in asserts.json before we attach the key as name. */
+/** Raw shape of each assert value before we attach the key as name. */
 interface AssertDefinition {
   hook: string;
   filter?: Record<string, unknown>;
@@ -33,13 +33,22 @@ interface AssertDefinition {
   shell: string;
   /** If true, this assert is active by default for new sessions. Defaults to false. */
   default?: boolean;
-  /** If true, this assert cannot be removed from the /asserts UI. Defaults to true. */
-  protected?: boolean;
 }
 
-/** Shape of an asserts.json file (top-level object). */
+/**
+ * Shape of an asserts.json file.
+ *
+ * Top-level keys are section names:
+ * - `"local"` → user-defined asserts (protected from removal)
+ * - `"$schema"` → ignored
+ * - `"repos"` → array of known repo keys (e.g. ["meffmadd/pi-assert-rules"])
+ * - `"owner/repo"` → asserts installed from that repo (removable)
+ */
 interface AssertsFile {
-  [name: string]: AssertDefinition;
+  $schema?: string;
+  local?: Record<string, AssertDefinition>;
+  repos?: string[];
+  [repo: string]: Record<string, AssertDefinition> | string | string[] | undefined;
 }
 
 /** Structured environment passed to every shell command. */
@@ -67,45 +76,101 @@ export interface ExtensionContext {
 // Config loading
 // ---------------------------------------------------------------------------
 
+interface ResolvedAssert {
+  name: string;
+  source: string;
+  def: AssertDefinition;
+}
+
 /**
  * Load asserts from `.pi/asserts.json` (project) and `~/.pi/asserts.json`
- * (global).  Project-level keys override global keys (shallow merge per name).
+ * (global).  Project-level entries override global entries by source + name.
  */
 export function loadAsserts(cwd: string): Assert[] {
-  const merged: Record<string, AssertDefinition> = {};
+  const merged = new Map<string, ResolvedAssert>();
+
+  // Read repos from project file to build known set (also applies to global)
+  const projectPath = join(cwd, ".pi", "asserts.json");
+  let knownRepos: Set<string> | undefined;
+  if (existsSync(projectPath)) {
+    try {
+      const raw = JSON.parse(
+        readFileSync(projectPath, "utf-8"),
+      ) as Record<string, unknown>;
+      if (Array.isArray(raw.repos)) {
+        knownRepos = new Set(
+          (raw.repos as string[]).filter(
+            (r) => typeof r === "string" && r.includes("/"),
+          ),
+        );
+        knownRepos.add("local");
+      }
+    } catch {
+      // Ignore parse errors; will be handled by readSections
+    }
+  }
 
   // 1. Global
   const globalPath = join(homedir(), ".pi", "asserts.json");
   if (existsSync(globalPath)) {
-    const raw = parseAssertsFile(globalPath);
-    for (const [name, def] of Object.entries(raw)) {
-      if (isValidAssert(def)) merged[name] = def;
+    for (const entry of readSections(globalPath, knownRepos)) {
+      merged.set(key(entry), entry);
     }
   }
 
-  // 2. Project (overrides global by key)
-  const projectPath = join(cwd, ".pi", "asserts.json");
+  // 2. Project (overrides global by source+name)
   if (existsSync(projectPath)) {
-    const raw = parseAssertsFile(projectPath);
-    for (const [name, def] of Object.entries(raw)) {
-      if (isValidAssert(def)) merged[name] = def;
+    for (const entry of readSections(projectPath, knownRepos)) {
+      merged.set(key(entry), entry);
     }
   }
 
-  return Object.entries(merged).map(([name, def]) => ({
+  return Array.from(merged.values()).map(({ name, source, def }) => ({
     name,
+    source,
     hook: def.hook,
     filter: def.filter,
     when: def.when,
     shell: def.shell,
     default: def.default ?? false,
-    protected: def.protected ?? true,
   }));
 }
 
-function parseAssertsFile(path: string): AssertsFile {
+function key(e: ResolvedAssert): string {
+  return `${e.source}\x00${e.name}`;
+}
+
+/** Flatten a sectioned asserts file into (source, name, def) triples. */
+function readSections(
+  path: string,
+  knownRepos?: Set<string>,
+): ResolvedAssert[] {
   const content = readFileSync(path, "utf-8");
-  return JSON.parse(content) as AssertsFile;
+  const raw = JSON.parse(content) as Record<string, unknown>;
+  const results: ResolvedAssert[] = [];
+
+  // If knownRepos is provided, only accept those sections.
+  // If undefined, accept every object-typed section (backward compat).
+  const hasKnown = knownRepos !== undefined;
+
+  for (const [section, entries] of Object.entries(raw)) {
+    // Skip metadata keys (but NOT "local" — that's a real section)
+    if (section === "$schema" || section === "repos") continue;
+    if (typeof entries !== "object" || entries === null) continue;
+
+    // Filter to known repos when the caller provides a set
+    if (hasKnown && !knownRepos.has(section)) continue;
+
+    for (const [name, def] of Object.entries(
+      entries as Record<string, unknown>,
+    )) {
+      if (isValidAssert(def)) {
+        results.push({ name, source: section, def });
+      }
+    }
+  }
+
+  return results;
 }
 
 function isValidAssert(def: unknown): def is AssertDefinition {

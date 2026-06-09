@@ -16,6 +16,8 @@ import {
   fetchRuleFile,
   installRule,
   removeRule,
+  addRepo,
+  getInstalledRepos,
   type RuleEntries,
 } from "./install.js";
 import {
@@ -113,13 +115,173 @@ export default function (pi: ExtensionAPI) {
   // -----------------------------------------------------------------------
   // /asserts install — browse and install rules from GitHub
   // -----------------------------------------------------------------------
+  // Install flow: repo picker → (add repo) → file picker → assert picker
+  // -----------------------------------------------------------------------
   async function installFlow(ctx: ExtensionContext): Promise<void> {
-    const repo = "meffmadd/pi-assert-rules";
+    const DEFAULT_REPO =
+      process.env.PI_ASSERT_DEFAULT_REPO ?? "meffmadd/pi-assert-rules";
+
+    // ── Step 0: pick (or add) a repo ──
+    let selectedRepo: string | null = null;
+
+    while (!selectedRepo) {
+      const repos = getInstalledRepos(ctx.cwd);
+
+      // Build items: each repo + "Add repo..." at the bottom
+      const items: SelectItem[] = [
+        ...repos.map((r) => ({ value: r, label: r })),
+        { value: "__add__", label: "Add repo…" },
+      ];
+
+      const action = await ctx.ui.custom<string | null>(
+        (tui, theme, _kb, done) => {
+          const container = new Container();
+          container.addChild(
+            new DynamicBorder((s: string) => theme.fg("accent", s)),
+          );
+          container.addChild(
+            new Text(
+              theme.fg("accent", theme.bold("Repos")),
+              1,
+              0,
+            ),
+          );
+
+          const list = new SelectList(
+            items,
+            Math.min(items.length, 12),
+            {
+              selectedPrefix: (t: string) => theme.fg("accent", t),
+              selectedText: (t: string) => theme.fg("accent", t),
+              description: (t: string) => theme.fg("muted", t),
+              scrollInfo: (t: string) => theme.fg("dim", t),
+              noMatch: (t: string) => theme.fg("warning", t),
+            },
+          );
+          list.onSelect = (item) => done(item.value);
+          list.onCancel = () => done(null);
+          container.addChild(list);
+
+          const hintText =
+            repos.length === 0
+              ? "enter add repo • esc cancel"
+              : "↑↓ navigate • enter select • esc cancel";
+          container.addChild(
+            new Text(theme.fg("dim", hintText), 1, 0),
+          );
+          container.addChild(
+            new DynamicBorder((s: string) => theme.fg("accent", s)),
+          );
+
+          return {
+            render: (w: number) => container.render(w),
+            invalidate: () => container.invalidate(),
+            handleInput: (data: string) => {
+              list.handleInput(data);
+              tui.requestRender();
+            },
+          };
+        },
+      );
+
+      // Esc → cancel entire install
+      if (action === null) return;
+
+      if (action === "__add__") {
+        // ── Add repo flow ──
+        const newRepo = await ctx.ui.custom<string | null>(
+          (tui, theme, _kb, done) => {
+            let buffer = repos.length === 0 ? DEFAULT_REPO : "";
+
+            const container = new Container();
+            container.addChild(
+              new DynamicBorder((s: string) => theme.fg("accent", s)),
+            );
+            container.addChild(
+              new Text(
+                theme.fg("accent", theme.bold("Add repo")),
+                1,
+                0,
+              ),
+            );
+            container.addChild(
+              new Text(
+                theme.fg("muted", "Enter owner/repo:"),
+                1,
+                0,
+              ),
+            );
+
+            // Render the current buffer inline
+            const inputDisplay = new (class {
+              render() {
+                return [`  ${theme.fg("accent", buffer || " ")}`];
+              }
+              invalidate() {}
+            })();
+            container.addChild(inputDisplay);
+
+            container.addChild(
+              new Text(
+                theme.fg("dim", "enter confirm • esc back"),
+                1,
+                0,
+              ),
+            );
+            container.addChild(
+              new DynamicBorder((s: string) => theme.fg("accent", s)),
+            );
+
+            return {
+              render: (w: number) => container.render(w),
+              invalidate: () => container.invalidate(),
+              handleInput: (data: string) => {
+                if (matchesKey(data, Key.escape)) {
+                  done(null);
+                  return;
+                }
+                if (matchesKey(data, "enter")) {
+                  const trimmed = buffer.trim();
+                  if (!trimmed) return;
+                  done(trimmed);
+                  return;
+                }
+                if (matchesKey(data, "backspace")) {
+                  buffer = buffer.slice(0, -1);
+                  tui.requestRender();
+                  return;
+                }
+                // Append printable character
+                if (data.length === 1 && data >= " ") {
+                  buffer += data;
+                  tui.requestRender();
+                }
+              },
+            };
+          },
+        );
+
+        if (!newRepo) continue; // esc → back to repo picker
+
+        try {
+          addRepo(ctx.cwd, newRepo);
+          selectedRepo = newRepo;
+        } catch (err) {
+          ctx.ui.notify(
+            `pi-assert: ${String(err)}`,
+            "error",
+          );
+          continue; // back to repo picker to try again
+        }
+      } else {
+        selectedRepo = action;
+      }
+    }
 
     // ── Step 1: fetch and pick a rule file ──
     let files: Awaited<ReturnType<typeof fetchRuleFiles>>;
     try {
-      files = await fetchRuleFiles(repo);
+      files = await fetchRuleFiles(selectedRepo);
     } catch (err) {
       ctx.ui.notify(
         `pi-assert: failed to fetch rule files — ${String(err)}`,
@@ -129,7 +291,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (files.length === 0) {
-      ctx.ui.notify("No rule files found in pi-assert-rules.", "info");
+      ctx.ui.notify(`No rule files found in ${selectedRepo}.`, "info");
       return;
     }
 
@@ -146,7 +308,10 @@ export default function (pi: ExtensionAPI) {
         );
         container.addChild(
           new Text(
-            theme.fg("accent", theme.bold("Rule Files (pi-assert-rules)")),
+            theme.fg(
+              "accent",
+              theme.bold(`Rule Files (${selectedRepo})`),
+            ),
             1,
             0,
           ),
@@ -190,7 +355,7 @@ export default function (pi: ExtensionAPI) {
     // ── Step 2: fetch and parse the file ──
     let entries: RuleEntries;
     try {
-      entries = await fetchRuleFile(repo, selectedFile);
+      entries = await fetchRuleFile(selectedRepo, selectedFile);
     } catch (err) {
       ctx.ui.notify(
         `pi-assert: failed to load rule file — ${String(err)}`,
@@ -267,7 +432,7 @@ export default function (pi: ExtensionAPI) {
     // ── Step 4: install ──
     const entry = entries[selectedName]!;
     try {
-      installRule(ctx.cwd, selectedName, entry);
+      installRule(ctx.cwd, selectedRepo, selectedName, entry);
 
       // Reload in-memory asserts so the new rule appears in /asserts
       asserts = loadAsserts(ctx.cwd);
@@ -330,93 +495,250 @@ export default function (pi: ExtensionAPI) {
               })(),
             );
 
-            // ── Settings list (or empty-state) ──
-            interface ListHandle {
-              handleInput(data: string): void;
-              invalidate(): void;
-              render(width: number): string[];
+            // ── Group asserts by source ──
+            const bySource = new Map<string, Assert[]>();
+            for (const a of asserts) {
+              const list = bySource.get(a.source) ?? [];
+              list.push(a);
+              bySource.set(a.source, list);
             }
-            let listHandle: ListHandle | undefined;
+            // Order: local first, repos alphabetically
+            const sectionOrder = Array.from(bySource.keys()).sort((a, b) => {
+              if (a === "local") return -1;
+              if (b === "local") return 1;
+              return a.localeCompare(b);
+            });
+
+            // ── Per-section lists ──
+            interface Section {
+              source: string;
+              asserts: Assert[];
+              list: SettingsList;
+            }
+            const sections: Section[] = [];
+            let focusedSection = 0;
             let confirmName: string | null = null;
-            let rawList: SettingsList | undefined;
+            let confirmSource: string | null = null;
 
-            if (asserts.length > 0) {
-              const items: SettingItem[] = asserts.map((a) => ({
-                id: a.name,
-                label: a.name,
-                currentValue: activeAsserts.has(a.name)
-                  ? "enabled"
-                  : "disabled",
-                values: ["enabled", "disabled"],
-              }));
-
-              rawList = new SettingsList(
-                items,
-                Math.min(items.length + 5, 15),
-                {
-                  ...getSettingsListTheme(),
-                  selectedPrefix: (t: string) =>
-                    theme.fg("accent", "> "),
-                  selectedText: (t: string) =>
-                    theme.fg("accent", t),
-                },
-                (id, newValue) => {
-                  if (newValue === "enabled") {
-                    activeAsserts.add(id);
-                  } else {
-                    activeAsserts.delete(id);
-                  }
-                  persistState();
-                  updateStatus(ctx);
-                  tui.requestRender();
-                },
-                () => done(null),
+            if (sectionOrder.length > 0) {
+              // Pre-calculate total line count for maxVisible across all lists
+              const totalItems = asserts.length;
+              const perListMax = Math.max(
+                3,
+                Math.min(10, Math.ceil(15 / sectionOrder.length)),
               );
 
-              // Wrap SettingsList to: augment hint, handle confirmation
-              const wrapped = new (class {
+              for (const source of sectionOrder) {
+                const group = bySource.get(source)!;
+                const items: SettingItem[] = group.map((a) => ({
+                  id: a.name,
+                  label: a.name,
+                  currentValue: activeAsserts.has(a.name)
+                    ? "enabled"
+                    : "disabled",
+                  values: ["enabled", "disabled"],
+                }));
+
+                const sl = new SettingsList(
+                  items,
+                  Math.min(items.length + 3, perListMax),
+                  {
+                    ...getSettingsListTheme(),
+                    selectedPrefix: (t: string) =>
+                      theme.fg("accent", "> "),
+                    selectedText: (t: string) =>
+                      theme.fg("accent", t),
+                  },
+                  (id, newValue) => {
+                    if (newValue === "enabled") {
+                      activeAsserts.add(id);
+                    } else {
+                      activeAsserts.delete(id);
+                    }
+                    persistState();
+                    updateStatus(ctx);
+                    tui.requestRender();
+                  },
+                  () => done(null),
+                );
+
+                sections.push({ source, asserts: group, list: sl });
+              }
+
+              // ── Render wrapper: section headers + lists ──
+              const renderer = new (class {
                 render(width: number) {
-                  if (confirmName) {
-                    // Confirmation prompt replaces the list
+                  if (confirmName && confirmSource) {
                     const msg = `Remove "${confirmName}"? ${theme.fg("accent", "y")}/${theme.fg("dim", "n")}`;
                     return ["", `  ${msg}`, ""];
                   }
-                  const lines = rawList.render(width);
-                  if (lines.length >= 2) {
-                    const last = lines[lines.length - 1];
-                    const prev = lines[lines.length - 2];
-                    if (
-                      prev === "" &&
-                      last.includes("Enter/Space to change")
-                    ) {
-                      const tail = theme.fg("dim", " · Esc to cancel");
-                      const augmented = last.replace(
-                        "· Esc to cancel",
-                        `· ${theme.fg("accent", "d")} ${theme.fg("dim", "Remove")} · ${theme.fg("accent", "i")} ${theme.fg("dim", "Install asserts")}${tail}`,
+
+                  const lines: string[] = [];
+                  for (let i = 0; i < sections.length; i++) {
+                    const sec = sections[i];
+                    const isFocused = i === focusedSection;
+
+                    // Section header
+                    if (sec.source !== "local") {
+                      lines.push(
+                        `  ${theme.fg(isFocused ? "accent" : "muted", sec.source)}`,
                       );
-                      lines[lines.length - 1] = augmented;
+                    } else {
+                      lines.push(
+                        `  ${theme.fg(isFocused ? "accent" : "muted", "Local")}`,
+                      );
                     }
+
+                    // List (or dimmed text if not focused)
+                    if (isFocused) {
+                      const listLines = sec.list.render(width);
+                      // Strip SettingsList's built-in hint (last 2 lines)
+                      if (
+                        listLines.length >= 2 &&
+                        listLines[listLines.length - 2] === "" &&
+                        listLines[listLines.length - 1]?.includes(
+                          "Enter/Space to change",
+                        )
+                      ) {
+                        listLines.length -= 2;
+                      }
+                      for (const l of listLines) lines.push(l);
+                    } else {
+                      for (const a of sec.asserts) {
+                        const status = activeAsserts.has(a.name)
+                          ? theme.fg("muted", "enabled")
+                          : theme.fg("dim", "disabled");
+                        lines.push(`   ${theme.fg("muted", a.name)}  ${status}`);
+                      }
+                    }
+                    if (i < sections.length - 1) lines.push("");
                   }
+
+                  // Hint — built by concatenating theme fragments so
+                  // no plain-text gaps appear between ANSI resets.
+                  const dim = (s: string) => theme.fg("dim", s);
+                  const acc = (s: string) => theme.fg("accent", s);
+                  const focused2 = sections[focusedSection];
+                  const hint =
+                    dim("  Enter/Space to change · ") +
+                    (focused2?.source !== "local"
+                      ? acc("d") + dim(" Remove · ")
+                      : "") +
+                    acc("i") +
+                    dim(" Install asserts · Esc to cancel");
+                  lines.push("", hint);
+
                   return lines;
                 }
                 invalidate() {
-                  rawList.invalidate();
-                }
-                handleInput(data: string) {
-                  rawList.handleInput(data);
+                  for (const sec of sections) sec.list.invalidate();
                 }
               })();
-              listHandle = wrapped;
-              container.addChild(wrapped);
-            } else {
-              container.addChild(
-                new Text(
-                  theme.fg("dim", "No asserts defined."),
-                  1,
-                  0,
-                ),
-              );
+              container.addChild(renderer);
+
+              return {
+                render(width: number) {
+                  return container.render(width);
+                },
+                invalidate() {
+                  container.invalidate();
+                },
+                handleInput(data: string) {
+                  // ── Confirmation mode ──
+                  if (confirmName && confirmSource) {
+                    if (matchesKey(data, "y")) {
+                      removeRule(ctx.cwd, confirmSource, confirmName);
+                      activeAsserts.delete(confirmName);
+                      persistState();
+                      done("reload");
+                      return;
+                    }
+                    if (matchesKey(data, "n") || matchesKey(data, Key.escape)) {
+                      confirmName = null;
+                      confirmSource = null;
+                      container.invalidate();
+                      tui.requestRender();
+                      return;
+                    }
+                    return;
+                  }
+
+                  // ── Global hotkeys ──
+                  if (matchesKey(data, "i")) {
+                    done("install");
+                    return;
+                  }
+                  if (matchesKey(data, Key.escape)) {
+                    done(null);
+                    return;
+                  }
+
+                  const curr = sections[focusedSection];
+
+                  // ── d: remove selected assert (non-local only) ──
+                  if (matchesKey(data, "d")) {
+                    if (!curr || curr.source === "local") {
+                      ctx.ui.notify(
+                        "Local asserts cannot be removed from the UI",
+                        "info",
+                      );
+                      return;
+                    }
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const selIdx = (curr.list as any)?.selectedIndex ?? -1;
+                    const selected = curr.asserts[selIdx];
+                    if (selected) {
+                      confirmName = selected.name;
+                      confirmSource = curr.source;
+                      container.invalidate();
+                      tui.requestRender();
+                    }
+                    return;
+                  }
+
+                  // ── Arrow keys: cross section boundaries ──
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  const currIdx = (curr.list as any)?.selectedIndex ?? 0;
+                  const currLen = curr.asserts.length;
+
+                  if (matchesKey(data, "up") && currIdx === 0 && focusedSection > 0) {
+                    focusedSection--;
+                    const prev = sections[focusedSection];
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    (prev.list as any).selectedIndex = prev.asserts.length - 1;
+                    container.invalidate();
+                    tui.requestRender();
+                    return;
+                  }
+                  if (
+                    matchesKey(data, "down") &&
+                    currIdx >= currLen - 1 &&
+                    focusedSection < sections.length - 1
+                  ) {
+                    focusedSection++;
+                    const next = sections[focusedSection];
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    (next.list as any).selectedIndex = 0;
+                    container.invalidate();
+                    tui.requestRender();
+                    return;
+                  }
+
+                  // Delegate to focused section's list
+                  curr.list.handleInput(data);
+                  tui.requestRender();
+                },
+              };
             }
+
+            // ── Empty state ──
+            container.addChild(
+              new Text(
+                theme.fg("dim", "No asserts defined."),
+                1,
+                0,
+              ),
+            );
 
             return {
               render(width: number) {
@@ -426,26 +748,6 @@ export default function (pi: ExtensionAPI) {
                 container.invalidate();
               },
               handleInput(data: string) {
-                // ── Confirmation mode ──
-                if (confirmName) {
-                  if (matchesKey(data, "y")) {
-                    removeRule(ctx.cwd, confirmName);
-                    // Also remove from active set so stale entries don't linger
-                    activeAsserts.delete(confirmName);
-                    persistState();
-                    done("reload"); // close and reopen to reload from file
-                    return;
-                  }
-                  if (matchesKey(data, "n") || matchesKey(data, Key.escape)) {
-                    confirmName = null;
-                    container.invalidate();
-                    tui.requestRender();
-                    return;
-                  }
-                  return;
-                }
-
-                // ── Global hotkeys ──
                 if (matchesKey(data, "i")) {
                   done("install");
                   return;
@@ -454,29 +756,6 @@ export default function (pi: ExtensionAPI) {
                   done(null);
                   return;
                 }
-
-                // ── d: remove selected assert (if not protected) ──
-                if (matchesKey(data, "d")) {
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  const selIdx = (rawList as any)?.selectedIndex ?? -1;
-                  const selected = asserts[selIdx];
-                  if (selected && selected.protected !== false) {
-                    ctx.ui.notify(
-                      `"${selected.name}" is protected and cannot be removed`,
-                      "info",
-                    );
-                    return;
-                  }
-                  if (selected) {
-                    confirmName = selected.name;
-                    container.invalidate();
-                    tui.requestRender();
-                  }
-                  return;
-                }
-
-                listHandle?.handleInput?.(data);
-                tui.requestRender();
               },
             };
           },

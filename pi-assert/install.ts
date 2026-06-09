@@ -5,7 +5,7 @@ import { join, dirname } from "node:path";
 // Types
 // ---------------------------------------------------------------------------
 
-/** A single entry in a rules/*.json file from the pi-assert-rules repo. */
+/** A single entry in a rules/*.json file from a pi-assert-rules repo. */
 export interface RuleEntry {
   /** Human-readable description shown in the install TUI. Stripped on install. */
   description: string;
@@ -33,25 +33,37 @@ export interface RuleFile {
 // GitHub API
 // ---------------------------------------------------------------------------
 
+const API_BASE = "https://api.github.com";
+
 /**
- * Fetch the list of .json files from the `rules/` directory of a GitHub repo
- * via the unauthenticated contents API.
+ * List `.json` files under `rules/` in a GitHub repo.
+ *
+ * Returns only regular files ending in `.json` (directories and other
+ * file types are filtered out).  The `name` field has the `.json` extension
+ * stripped (e.g. "defaults").
  */
-export async function fetchRuleFiles(repo: string): Promise<RuleFile[]> {
-  const url = `https://api.github.com/repos/${repo}/contents/rules`;
-  const res = await fetch(url, {
-    headers: { Accept: "application/vnd.github.v3+json" },
-  });
+export async function fetchRuleFiles(
+  repo: string,
+  ref = "main",
+): Promise<RuleFile[]> {
+  const url = `${API_BASE}/repos/${repo}/contents/rules?ref=${ref}`;
+  const res = await fetch(url);
 
   if (!res.ok) {
-    throw new Error(
-      `GitHub API error fetching rules list: ${res.status} ${res.statusText}`,
-    );
+    throw new Error(`GitHub API returned ${res.status} for ${url}`);
   }
 
-  const data = (await res.json()) as GitHubContentItem[];
-  return data
-    .filter((item) => item.type === "file" && item.name.endsWith(".json"))
+  const items = (await res.json()) as Array<{
+    name: string;
+    path: string;
+    sha: string;
+    type: string;
+  }>;
+
+  return items
+    .filter(
+      (item) => item.type === "file" && item.name.endsWith(".json"),
+    )
     .map((item) => ({
       name: item.name.replace(/\.json$/, ""),
       path: item.path,
@@ -59,42 +71,39 @@ export async function fetchRuleFiles(repo: string): Promise<RuleFile[]> {
     }));
 }
 
-interface GitHubContentItem {
-  type: string;
-  name: string;
-  path: string;
-  sha: string;
-}
-
 /**
  * Fetch and parse a single rules/*.json file from a GitHub repo.
- * Returns a map of assert name → definition (with `description` field).
+ *
+ * Returns only entries that have a `description`, `hook`, and `shell`.
  */
 export async function fetchRuleFile(
   repo: string,
   path: string,
+  ref = "main",
 ): Promise<RuleEntries> {
-  const url = `https://api.github.com/repos/${repo}/contents/${path}`;
-  const res = await fetch(url, {
-    headers: { Accept: "application/vnd.github.v3+json" },
-  });
+  const url = `${API_BASE}/repos/${repo}/contents/${encodeURIComponent(path)}?ref=${ref}`;
+  const res = await fetch(url);
 
   if (!res.ok) {
-    throw new Error(
-      `GitHub API error fetching rule file: ${res.status} ${res.statusText}`,
-    );
+    throw new Error(`GitHub API returned ${res.status} for ${url}`);
   }
 
   const item = (await res.json()) as GitHubFileItem;
+
   if (item.type !== "file" || !item.content) {
-    throw new Error(`Not a file: ${path}`);
+    throw new Error("Not a file or missing content");
   }
 
   const raw = Buffer.from(item.content, "base64").toString("utf-8");
-  const parsed: unknown = JSON.parse(raw);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("Failed to parse JSON from GitHub file");
+  }
 
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error(`Rule file ${path} is not a JSON object`);
+    throw new Error("File content is not a JSON object");
   }
 
   const entries: RuleEntries = {};
@@ -123,89 +132,145 @@ function isValidRuleEntry(def: unknown): def is RuleEntry {
 }
 
 // ---------------------------------------------------------------------------
-// Local install
+// Structured file I/O (sectioned format)
+// ---------------------------------------------------------------------------
+
+/** Shape of the sectioned .pi/asserts.json file. */
+interface SectionedFile {
+  $schema?: string;
+  repos?: string[];
+  local?: Record<string, unknown>;
+  [repo: string]: unknown;
+}
+
+function readFile(cwd: string): SectionedFile {
+  const projectPath = join(cwd, ".pi", "asserts.json");
+
+  if (!existsSync(projectPath)) return {};
+
+  const raw = readFileSync(projectPath, "utf-8");
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return {};
+    return parsed as SectionedFile;
+  } catch {
+    return {};
+  }
+}
+
+function writeFile(cwd: string, data: SectionedFile): void {
+  const projectPath = join(cwd, ".pi", "asserts.json");
+  const dir = dirname(projectPath);
+
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+
+  writeFileSync(projectPath, JSON.stringify(data, null, 2) + "\n", "utf-8");
+}
+
+// ---------------------------------------------------------------------------
+// Install / remove
 // ---------------------------------------------------------------------------
 
 /**
- * Install a single assert into the project's `.pi/asserts.json`.
+ * Install a single assert into the project's `.pi/asserts.json`
+ * under the given `repo` key (e.g. "meffmadd/pi-assert-rules").
  *
- * Strips the `description` field before writing — only schema-valid fields
- * (`hook`, `shell`, `filter`, `when`, `default`) are persisted.
- * Creates the `.pi/` directory if it doesn't exist.
+ * Strips the `description` field — only schema-valid fields are persisted.
  */
 export function installRule(
   cwd: string,
+  repo: string,
   name: string,
   entry: RuleEntry,
 ): void {
-  const projectPath = join(cwd, ".pi", "asserts.json");
+  const current = readFile(cwd);
 
-  // Read existing file (or start fresh)
-  let current: Record<string, unknown> = {};
-  if (existsSync(projectPath)) {
-    const raw = readFileSync(projectPath, "utf-8");
-    try {
-      current = JSON.parse(raw) as Record<string, unknown>;
-    } catch {
-      // If the existing file is broken, start fresh but warn
-      current = {};
-    }
+  // Ensure repo is in the repos array
+  if (!current.repos) current.repos = [];
+  if (!current.repos.includes(repo)) {
+    current.repos.push(repo);
   }
+
+  // Ensure the repo section exists
+  if (!current[repo]) {
+    current[repo] = {};
+  }
+  const section = current[repo] as Record<string, unknown>;
 
   // Build the clean assert definition (no `description`)
   const clean: Record<string, unknown> = {
     hook: entry.hook,
     shell: entry.shell,
-    protected: false,
   };
   if (entry.filter !== undefined) clean.filter = entry.filter;
   if (entry.when !== undefined) clean.when = entry.when;
   if (entry.default !== undefined) clean.default = entry.default;
 
-  // Warn if overwriting an existing assert
-  if (current[name] !== undefined) {
-    const existing = current[name] as Record<string, unknown>;
-    if (existing.protected !== false) {
-      console.warn(
-        `pi-assert: overwriting user-defined assert "${name}" with installed version`,
-      );
-    }
+  // Warn if overwriting
+  if (section[name] !== undefined) {
+    console.warn(
+      `pi-assert: overwriting existing assert "${name}" in "${repo}"`,
+    );
   }
 
-  current[name] = clean;
-
-  // Ensure .pi/ directory exists
-  const dir = dirname(projectPath);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-
-  writeFileSync(projectPath, JSON.stringify(current, null, 2) + "\n", "utf-8");
+  section[name] = clean;
+  writeFile(cwd, current);
 }
 
 /**
- * Remove a named assert from the project's `.pi/asserts.json`.
- * No-op if the assert doesn't exist.
+ * Remove a named assert from a specific repo section.
+ * Prunes the section key entirely if it becomes empty.
+ * Returns true if the assert was found and removed.
  */
 export function removeRule(
   cwd: string,
+  repo: string,
   name: string,
 ): boolean {
-  const projectPath = join(cwd, ".pi", "asserts.json");
+  const current = readFile(cwd);
 
-  if (!existsSync(projectPath)) return false;
-
-  let current: Record<string, unknown>;
-  try {
-    const raw = readFileSync(projectPath, "utf-8");
-    current = JSON.parse(raw) as Record<string, unknown>;
-  } catch {
+  const section = current[repo] as Record<string, unknown> | undefined;
+  if (!section || typeof section !== "object" || !(name in section)) {
     return false;
   }
 
-  if (!(name in current)) return false;
+  delete section[name];
 
-  delete current[name];
-  writeFileSync(projectPath, JSON.stringify(current, null, 2) + "\n", "utf-8");
+  // Prune empty section
+  if (Object.keys(section).length === 0) {
+    delete current[repo];
+  }
+
+  writeFile(cwd, current);
   return true;
+}
+
+/**
+ * Return the list of repos declared in the config.
+ * These are the repos the user has configured for installing asserts.
+ */
+export function getInstalledRepos(cwd: string): string[] {
+  const current = readFile(cwd);
+  return current.repos ?? [];
+}
+
+/**
+ * Add a repo to the `repos` array in the project config.
+ * No-op if the repo is already present.
+ *
+ * Validates the owner/repo format.
+ */
+export function addRepo(cwd: string, repo: string): void {
+  if (!/^[^/]+\/[^/]+$/.test(repo)) {
+    throw new Error(`Invalid repo format: "${repo}". Expected owner/repo.`);
+  }
+
+  const current = readFile(cwd);
+  if (!current.repos) current.repos = [];
+  if (current.repos.includes(repo)) return; // already present
+
+  current.repos.push(repo);
+  writeFile(cwd, current);
 }

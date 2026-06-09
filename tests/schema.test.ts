@@ -26,8 +26,6 @@ const validate = ajv.compile(schema);
 
 describe("schema self-validation", () => {
   it("schema.json is valid JSON Schema (draft-07)", () => {
-    // Compiling would have thrown if the schema itself was invalid.
-    // ajv.compile runs meta-validation internally.
     assert.ok(validate);
   });
 });
@@ -39,10 +37,12 @@ describe("schema self-validation", () => {
 describe("SKILL.md examples", () => {
   it("block all write tool calls", () => {
     const cfg = {
-      unmodified: {
-        hook: "tool_call",
-        filter: { toolName: "write" },
-        shell: "false",
+      local: {
+        unmodified: {
+          hook: "tool_call",
+          filter: { toolName: "write" },
+          shell: "false",
+        },
       },
     };
     assert.ok(validate(cfg), ajv.errorsText(validate.errors));
@@ -50,11 +50,13 @@ describe("SKILL.md examples", () => {
 
   it("guard specific file paths", () => {
     const cfg = {
-      "protect-env-files": {
-        hook: "tool_call",
-        filter: { toolName: "write" },
-        shell:
-          'echo "$PI_TOOL_INPUT" | grep -q \'\\.env\' && exit 1 || exit 0',
+      local: {
+        "protect-env-files": {
+          hook: "tool_call",
+          filter: { toolName: "write" },
+          shell:
+            'echo "$PI_TOOL_INPUT" | grep -q \'\\.env\' && exit 1 || exit 0',
+        },
       },
     };
     assert.ok(validate(cfg), ajv.errorsText(validate.errors));
@@ -62,11 +64,13 @@ describe("SKILL.md examples", () => {
 
   it("no secrets in env", () => {
     const cfg = {
-      "no-secrets-in-env": {
-        hook: "tool_call",
-        filter: { toolName: "bash" },
-        shell:
-          'grep -q SECRET_KEY <<< "$PI_TOOL_INPUT" && exit 1 || exit 0',
+      local: {
+        "no-secrets-in-env": {
+          hook: "tool_call",
+          filter: { toolName: "bash" },
+          shell:
+            'grep -q SECRET_KEY <<< "$PI_TOOL_INPUT" && exit 1 || exit 0',
+        },
       },
     };
     assert.ok(validate(cfg), ajv.errorsText(validate.errors));
@@ -74,11 +78,13 @@ describe("SKILL.md examples", () => {
 
   it("block rm -rf", () => {
     const cfg = {
-      "block-rm-rf": {
-        hook: "tool_call",
-        filter: { toolName: "bash" },
-        shell:
-          'grep -qE \'rm[[:space:]]+-rf\' <<< "$PI_TOOL_INPUT" && exit 1 || exit 0',
+      local: {
+        "block-rm-rf": {
+          hook: "tool_call",
+          filter: { toolName: "bash" },
+          shell:
+            'grep -qE \'rm[[:space:]]+-rf\' <<< "$PI_TOOL_INPUT" && exit 1 || exit 0',
+        },
       },
     };
     assert.ok(validate(cfg), ajv.errorsText(validate.errors));
@@ -86,11 +92,13 @@ describe("SKILL.md examples", () => {
 
   it("write only in src", () => {
     const cfg = {
-      "write-only-in-src": {
-        hook: "tool_call",
-        filter: { toolName: "write" },
-        shell:
-          'echo "$PI_TOOL_INPUT" | grep -q \'"path":"src/\' && exit 0 || exit 1',
+      local: {
+        "write-only-in-src": {
+          hook: "tool_call",
+          filter: { toolName: "write" },
+          shell:
+            'echo "$PI_TOOL_INPUT" | grep -q \'"path":"src/\' && exit 0 || exit 1',
+        },
       },
     };
     assert.ok(validate(cfg), ajv.errorsText(validate.errors));
@@ -98,11 +106,13 @@ describe("SKILL.md examples", () => {
 
   it("no sensitive reads", () => {
     const cfg = {
-      "no-sensitive-reads": {
-        hook: "tool_call",
-        filter: { toolName: "read" },
-        shell:
-          'echo "$PI_TOOL_INPUT" | grep -qE \'\\.(env|pem|key)\' && exit 1 || exit 0',
+      local: {
+        "no-sensitive-reads": {
+          hook: "tool_call",
+          filter: { toolName: "read" },
+          shell:
+            'echo "$PI_TOOL_INPUT" | grep -qE \'\\.(env|pem|key)\' && exit 1 || exit 0',
+        },
       },
     };
     assert.ok(validate(cfg), ajv.errorsText(validate.errors));
@@ -110,17 +120,19 @@ describe("SKILL.md examples", () => {
 
   it("default-based activation example", () => {
     const cfg = {
-      "always-active": {
-        hook: "tool_call",
-        filter: { toolName: "write" },
-        shell: "false",
-        default: true,
-      },
-      "opt-in": {
-        hook: "tool_call",
-        filter: { toolName: "bash" },
-        shell: "false",
-        default: false,
+      local: {
+        "always-active": {
+          hook: "tool_call",
+          filter: { toolName: "write" },
+          shell: "false",
+          default: true,
+        },
+        "opt-in": {
+          hook: "tool_call",
+          filter: { toolName: "bash" },
+          shell: "false",
+          default: false,
+        },
       },
     };
     assert.ok(validate(cfg), ajv.errorsText(validate.errors));
@@ -133,34 +145,36 @@ describe("SKILL.md examples", () => {
 
 describe("invalid configs rejected", () => {
   it("missing required 'hook'", () => {
-    const cfg = { bad: { shell: "true" } };
+    const cfg = { local: { bad: { shell: "true" } } };
     assert.strictEqual(validate(cfg), false);
   });
 
   it("missing required 'shell'", () => {
-    const cfg = { bad: { hook: "tool_call" } };
+    const cfg = { local: { bad: { hook: "tool_call" } } };
     assert.strictEqual(validate(cfg), false);
   });
 
   it("unknown property at assert level", () => {
     const cfg = {
-      bad: {
-        hook: "tool_call",
-        shell: "true",
-        extraProp: "should not be here",
+      local: {
+        bad: {
+          hook: "tool_call",
+          shell: "true",
+          extraProp: "should not be here",
+        },
       },
     };
     assert.strictEqual(validate(cfg), false);
   });
 
   it("hook value not in enum", () => {
-    const cfg = { bad: { hook: "invalid_hook", shell: "true" } };
+    const cfg = { local: { bad: { hook: "invalid_hook", shell: "true" } } };
     assert.strictEqual(validate(cfg), false);
   });
 
   it("default is not boolean", () => {
     const cfg = {
-      bad: { hook: "tool_call", shell: "true", default: "yes" },
+      local: { bad: { hook: "tool_call", shell: "true", default: "yes" } },
     };
     assert.strictEqual(validate(cfg), false);
   });
@@ -173,19 +187,85 @@ describe("invalid configs rejected", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════
+// Section-based validation
+// ═══════════════════════════════════════════════════════════════════
+
+describe("section-based validation", () => {
+  it("accepts local section with valid asserts", () => {
+    const cfg = {
+      local: { guard: { hook: "tool_call", shell: "true" } },
+    };
+    assert.ok(validate(cfg));
+  });
+
+  it("accepts repo section with valid asserts", () => {
+    const cfg = {
+      "meffmadd/pi-assert-rules": {
+        "block-write": { hook: "tool_call", shell: "false" },
+      },
+    };
+    assert.ok(validate(cfg));
+  });
+
+  it("accepts mixed local and repo sections", () => {
+    const cfg = {
+      local: { custom: { hook: "tool_call", shell: "true" } },
+      "some/repo": { installed: { hook: "tool_call", shell: "false" } },
+    };
+    assert.ok(validate(cfg));
+  });
+
+  it("accepts $schema alongside sections", () => {
+    const cfg = {
+      $schema: "https://example.com/schema.json",
+      local: { guard: { hook: "tool_call", shell: "true" } },
+    };
+    assert.ok(validate(cfg));
+  });
+
+  it("accepts repos array with valid entries", () => {
+    const cfg = {
+      repos: ["meffmadd/pi-assert-rules"],
+      local: { guard: { hook: "tool_call", shell: "true" } },
+      "meffmadd/pi-assert-rules": {
+        block: { hook: "tool_call", shell: "false" },
+      },
+    };
+    assert.ok(validate(cfg));
+  });
+
+  it("repos must be an array", () => {
+    const cfg = { repos: "not-an-array" };
+    assert.strictEqual(validate(cfg), false);
+  });
+
+  it("repos entries must be owner/repo format", () => {
+    const cfg = { repos: ["no-slash"] };
+    assert.strictEqual(validate(cfg), false);
+  });
+
+  it("repos entries must be unique", () => {
+    const cfg = {
+      repos: ["a/b", "a/b"],
+    };
+    assert.strictEqual(validate(cfg), false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
 // Schema evolution — future hook values
 // ═══════════════════════════════════════════════════════════════════
 
 describe("schema evolution readiness", () => {
   it("accepts only 'tool_call' for now", () => {
     const cfg = {
-      guard: { hook: "tool_call", shell: "true" },
+      local: { guard: { hook: "tool_call", shell: "true" } },
     };
     assert.ok(validate(cfg));
 
     // But 'tool_result' is not yet in the enum
     const future = {
-      guard: { hook: "tool_result", shell: "true" },
+      local: { guard: { hook: "tool_result", shell: "true" } },
     };
     assert.strictEqual(validate(future), false);
   });

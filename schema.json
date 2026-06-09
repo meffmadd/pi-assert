@@ -8,10 +8,26 @@
     "$schema": {
       "type": "string",
       "description": "JSON Schema reference for editor autocompletion and validation."
+    },
+    "local": {
+      "type": "object",
+      "description": "User-defined asserts. Cannot be removed from the /asserts UI.",
+      "additionalProperties": {
+        "$ref": "#/$defs/assert"
+      }
+    },
+    "repos": {
+      "type": "array",
+      "description": "Repositories available for installing asserts (owner/repo).",
+      "items": {
+        "type": "string",
+        "pattern": "^[^/]+/[^/]+$"
+      },
+      "uniqueItems": true
     }
   },
   "additionalProperties": {
-    "$ref": "#/$defs/assert"
+    "$ref": "#/$defs/repo"
   },
   "$defs": {
     "assert": {
@@ -42,14 +58,16 @@
           "type": "boolean",
           "description": "If true, this assert is active by default for new sessions. Defaults to false.",
           "default": false
-        },
-        "protected": {
-          "type": "boolean",
-          "description": "If true, this assert cannot be removed from the /asserts UI. Defaults to true.",
-          "default": true
         }
       },
       "additionalProperties": false
+    },
+    "repo": {
+      "type": "object",
+      "description": "Asserts installed from a specific repository (keyed by owner/repo). Removable via the /asserts UI.",
+      "additionalProperties": {
+        "$ref": "#/$defs/assert"
+      }
     }
   }
 }

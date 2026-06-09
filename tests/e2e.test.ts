@@ -69,7 +69,8 @@ let savedHome: string | undefined;
 function setupConfig(dir: string, json: object) {
   const d = join(tmpRoot, dir);
   mkdirSync(join(d, ".pi"), { recursive: true });
-  writeFileSync(join(d, ".pi", "asserts.json"), JSON.stringify(json, null, 2));
+  // Wrap in local section for the new sectioned format
+  writeFileSync(join(d, ".pi", "asserts.json"), JSON.stringify({ local: json }, null, 2));
   return d;
 }
 
@@ -275,8 +276,8 @@ describe("e2e: orchestration", () => {
   it("asserts with non-tool_call hook are skipped", async () => {
     // Simulate what would happen if we had other hook types
     const asserts: Assert[] = [
-      { name: "future-hook", hook: "tool_result", filter: {}, shell: "false" },
-      { name: "blocker", hook: "tool_call", filter: {}, shell: "true" },
+      { name: "future-hook", source: "local", hook: "tool_result", filter: {}, shell: "false", default: false },
+      { name: "blocker", source: "local", hook: "tool_call", filter: {}, shell: "true", default: false },
     ];
 
     const event: ToolCallEvent = {

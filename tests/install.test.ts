@@ -13,6 +13,8 @@ import {
   fetchRuleFile,
   installRule,
   removeRule,
+  addRepo,
+  getInstalledRepos,
   type RuleEntries,
 } from "../pi-assert/install.js";
 
@@ -86,7 +88,6 @@ function mockDirItem(name: string, path: string, type = "file"): unknown {
 // ═══════════════════════════════════════════════════════════════════
 
 describe("fetchRuleFiles", () => {
-  // 1.1 ── Returns only .json files ────────────────────────────────
   it("returns only .json files and strips extension", async () => {
     mock.method(globalThis, "fetch", () =>
       mockJsonResponse([
@@ -103,7 +104,6 @@ describe("fetchRuleFiles", () => {
     assert.strictEqual(files[1].path, "rules/security.json");
   });
 
-  // 1.2 ── Filters out non-.json files ─────────────────────────────
   it("filters out non-.json files", async () => {
     mock.method(globalThis, "fetch", () =>
       mockJsonResponse([
@@ -117,7 +117,6 @@ describe("fetchRuleFiles", () => {
     assert.strictEqual(files[0].name, "defaults");
   });
 
-  // 1.3 ── Filters out directories ─────────────────────────────────
   it("filters out directories", async () => {
     mock.method(globalThis, "fetch", () =>
       mockJsonResponse([
@@ -131,40 +130,32 @@ describe("fetchRuleFiles", () => {
     assert.strictEqual(files[0].name, "defaults");
   });
 
-  // 1.4 ── Empty rules/ dir ────────────────────────────────────────
   it("returns [] for empty rules/ directory", async () => {
     mock.method(globalThis, "fetch", () => mockJsonResponse([]));
-
     const files = await fetchRuleFiles("meffmadd/pi-assert-rules");
     assert.deepStrictEqual(files, []);
   });
 
-  // 1.5 ── 404 error ───────────────────────────────────────────────
   it("throws on 404", async () => {
     mock.method(globalThis, "fetch", () => mockJsonResponse({}, 404));
-
     await assert.rejects(
       () => fetchRuleFiles("meffmadd/pi-assert-rules"),
       /404/,
     );
   });
 
-  // 1.6 ── 403 error (rate limit) ──────────────────────────────────
   it("throws on 403", async () => {
     mock.method(globalThis, "fetch", () => mockJsonResponse({}, 403));
-
     await assert.rejects(
       () => fetchRuleFiles("meffmadd/pi-assert-rules"),
       /403/,
     );
   });
 
-  // 1.7 ── Network error ───────────────────────────────────────────
   it("throws on network error", async () => {
     mock.method(globalThis, "fetch", () => {
       throw new Error("connect ECONNREFUSED");
     });
-
     await assert.rejects(
       () => fetchRuleFiles("meffmadd/pi-assert-rules"),
       /ECONNREFUSED/,
@@ -177,7 +168,6 @@ describe("fetchRuleFiles", () => {
 // ═══════════════════════════════════════════════════════════════════
 
 describe("fetchRuleFile", () => {
-  // 2.1 ── Parses valid multi-entry file ───────────────────────────
   it("parses a valid rules file with multiple entries", async () => {
     const content = {
       "block-write": {
@@ -212,18 +202,10 @@ describe("fetchRuleFile", () => {
     assert.strictEqual(entries["no-rm-rf"]?.shell, "grep rm");
   });
 
-  // 2.2 ── Skips entry missing `description` ───────────────────────
   it("skips entries missing description", async () => {
     const content = {
-      valid: {
-        description: "Valid entry.",
-        hook: "tool_call",
-        shell: "true",
-      },
-      "no-desc": {
-        hook: "tool_call",
-        shell: "false",
-      },
+      valid: { description: "Valid entry.", hook: "tool_call", shell: "true" },
+      "no-desc": { hook: "tool_call", shell: "false" },
     };
 
     mock.method(globalThis, "fetch", () =>
@@ -242,18 +224,10 @@ describe("fetchRuleFile", () => {
     assert.strictEqual(entries["no-desc"], undefined);
   });
 
-  // 2.3 ── Skips entry missing `hook` ──────────────────────────────
   it("skips entries missing hook", async () => {
     const content = {
-      "no-hook": {
-        description: "Missing hook.",
-        shell: "false",
-      },
-      valid: {
-        description: "Valid.",
-        hook: "tool_call",
-        shell: "true",
-      },
+      "no-hook": { description: "Missing hook.", shell: "false" },
+      valid: { description: "Valid.", hook: "tool_call", shell: "true" },
     };
 
     mock.method(globalThis, "fetch", () =>
@@ -271,18 +245,10 @@ describe("fetchRuleFile", () => {
     assert.ok(entries.valid);
   });
 
-  // 2.4 ── Skips entry missing `shell` ─────────────────────────────
   it("skips entries missing shell", async () => {
     const content = {
-      "no-shell": {
-        description: "Missing shell.",
-        hook: "tool_call",
-      },
-      valid: {
-        description: "Valid.",
-        hook: "tool_call",
-        shell: "true",
-      },
+      "no-shell": { description: "Missing shell.", hook: "tool_call" },
+      valid: { description: "Valid.", hook: "tool_call", shell: "true" },
     };
 
     mock.method(globalThis, "fetch", () =>
@@ -300,16 +266,11 @@ describe("fetchRuleFile", () => {
     assert.ok(entries.valid);
   });
 
-  // 2.5 ── Skips non-object entries ────────────────────────────────
   it("skips non-object entries (null, string)", async () => {
     const content = {
       nil: null,
       str: "just a string",
-      valid: {
-        description: "Valid.",
-        hook: "tool_call",
-        shell: "true",
-      },
+      valid: { description: "Valid.", hook: "tool_call", shell: "true" },
     };
 
     mock.method(globalThis, "fetch", () =>
@@ -327,20 +288,17 @@ describe("fetchRuleFile", () => {
     assert.ok(entries.valid);
   });
 
-  // 2.6 ── Throws when response is not a file ──────────────────────
   it("throws when response has no content (not a file)", async () => {
     mock.method(globalThis, "fetch", () =>
       mockJsonResponse({ type: "dir", name: "rules", path: "rules" }),
     );
 
     await assert.rejects(
-      () =>
-        fetchRuleFile("meffmadd/pi-assert-rules", "rules/defaults.json"),
+      () => fetchRuleFile("meffmadd/pi-assert-rules", "rules/defaults.json"),
       /Not a file/,
     );
   });
 
-  // 2.7 ── Throws on non-JSON content ──────────────────────────────
   it("throws on non-JSON content", async () => {
     const b64 = Buffer.from("not valid json!!!").toString("base64");
     mock.method(globalThis, "fetch", () =>
@@ -354,13 +312,11 @@ describe("fetchRuleFile", () => {
     );
 
     await assert.rejects(
-      () =>
-        fetchRuleFile("meffmadd/pi-assert-rules", "rules/defaults.json"),
+      () => fetchRuleFile("meffmadd/pi-assert-rules", "rules/defaults.json"),
       /JSON/,
     );
   });
 
-  // 2.8 ── Throws when content is a JSON array ─────────────────────
   it("throws when content is a JSON array", async () => {
     mock.method(globalThis, "fetch", () =>
       mockJsonResponse(
@@ -369,19 +325,16 @@ describe("fetchRuleFile", () => {
     );
 
     await assert.rejects(
-      () =>
-        fetchRuleFile("meffmadd/pi-assert-rules", "rules/defaults.json"),
+      () => fetchRuleFile("meffmadd/pi-assert-rules", "rules/defaults.json"),
       /not a JSON object/,
     );
   });
 
-  // 2.9 ── Throws on HTTP error ────────────────────────────────────
   it("throws on HTTP error", async () => {
     mock.method(globalThis, "fetch", () => mockJsonResponse({}, 500));
 
     await assert.rejects(
-      () =>
-        fetchRuleFile("meffmadd/pi-assert-rules", "rules/defaults.json"),
+      () => fetchRuleFile("meffmadd/pi-assert-rules", "rules/defaults.json"),
       /500/,
     );
   });
@@ -392,12 +345,11 @@ describe("fetchRuleFile", () => {
 // ═══════════════════════════════════════════════════════════════════
 
 describe("installRule", () => {
-  // 3.1 ── Fresh install (no prior file) ───────────────────────────
-  it("writes to fresh .pi/asserts.json", () => {
+  it("writes to fresh .pi/asserts.json under correct repo key", () => {
     const cwd = join(tmpRoot, "fresh");
     mkdirSync(cwd, { recursive: true });
 
-    installRule(cwd, "my-rule", {
+    installRule(cwd, "meffmadd/pi-assert-rules", "my-rule", {
       description: "A test rule.",
       hook: "tool_call",
       shell: "false",
@@ -406,23 +358,19 @@ describe("installRule", () => {
     const raw = readFileSync(join(cwd, ".pi", "asserts.json"), "utf-8");
     const parsed = JSON.parse(raw);
 
-    assert.deepStrictEqual(parsed, {
-      "my-rule": {
-        hook: "tool_call",
-        shell: "false",
-        protected: false,
-      },
+    assert.deepStrictEqual(parsed["meffmadd/pi-assert-rules"], {
+      "my-rule": { hook: "tool_call", shell: "false" },
     });
+    assert.deepStrictEqual(parsed.repos, ["meffmadd/pi-assert-rules"]);
+    assert.strictEqual(Object.keys(parsed).length, 2);
   });
 
-  // 3.2 ── Creates .pi/ directory when missing ─────────────────────
   it("creates .pi/ directory if missing", () => {
     const cwd = join(tmpRoot, "no-pi-dir");
     mkdirSync(cwd, { recursive: true });
-    // Make sure .pi/ does NOT exist yet
     assert.strictEqual(existsSync(join(cwd, ".pi")), false);
 
-    installRule(cwd, "my-rule", {
+    installRule(cwd, "some/repo", "my-rule", {
       description: "Test.",
       hook: "tool_call",
       shell: "true",
@@ -432,16 +380,17 @@ describe("installRule", () => {
     assert.strictEqual(existsSync(join(cwd, ".pi", "asserts.json")), true);
   });
 
-  // 3.3 ── Merges into existing file ───────────────────────────────
-  it("merges into existing file (preserves other keys)", () => {
+  it("merges into existing file (preserves other sections)", () => {
     const cwd = join(tmpRoot, "merge");
     mkdirSync(join(cwd, ".pi"), { recursive: true });
     writeFileSync(
       join(cwd, ".pi", "asserts.json"),
-      JSON.stringify({ existing: { hook: "tool_call", shell: "true" } }),
+      JSON.stringify({
+        local: { existing: { hook: "tool_call", shell: "true" } },
+      }),
     );
 
-    installRule(cwd, "new-rule", {
+    installRule(cwd, "meffmadd/pi-assert-rules", "new-rule", {
       description: "New rule.",
       hook: "tool_call",
       filter: { toolName: "bash" },
@@ -451,29 +400,29 @@ describe("installRule", () => {
     const raw = readFileSync(join(cwd, ".pi", "asserts.json"), "utf-8");
     const parsed = JSON.parse(raw);
 
-    assert.strictEqual(Object.keys(parsed).length, 2);
-    assert.deepStrictEqual(parsed.existing, {
-      hook: "tool_call",
-      shell: "true",
+    assert.strictEqual(Object.keys(parsed).length, 3);
+    assert.deepStrictEqual(parsed.local, {
+      existing: { hook: "tool_call", shell: "true" },
     });
-    assert.deepStrictEqual(parsed["new-rule"], {
-      hook: "tool_call",
-      filter: { toolName: "bash" },
-      shell: "false",
-      protected: false,
+    assert.deepStrictEqual(parsed["meffmadd/pi-assert-rules"], {
+      "new-rule": { hook: "tool_call", filter: { toolName: "bash" }, shell: "false" },
     });
+    assert.deepStrictEqual(parsed.repos, ["meffmadd/pi-assert-rules"]);
   });
 
-  // 3.4 ── Overwrites existing key ─────────────────────────────────
-  it("overwrites existing key with same name", () => {
+  it("overwrites existing key with same name in same repo", () => {
     const cwd = join(tmpRoot, "overwrite");
     mkdirSync(join(cwd, ".pi"), { recursive: true });
     writeFileSync(
       join(cwd, ".pi", "asserts.json"),
-      JSON.stringify({ "my-rule": { hook: "tool_call", shell: "old" } }),
+      JSON.stringify({
+        "meffmadd/pi-assert-rules": {
+          "my-rule": { hook: "tool_call", shell: "old" },
+        },
+      }),
     );
 
-    installRule(cwd, "my-rule", {
+    installRule(cwd, "meffmadd/pi-assert-rules", "my-rule", {
       description: "Updated.",
       hook: "tool_call",
       shell: "new",
@@ -482,20 +431,18 @@ describe("installRule", () => {
     const raw = readFileSync(join(cwd, ".pi", "asserts.json"), "utf-8");
     const parsed = JSON.parse(raw);
 
-    assert.deepStrictEqual(parsed["my-rule"], {
+    assert.deepStrictEqual(parsed["meffmadd/pi-assert-rules"]["my-rule"], {
       hook: "tool_call",
       shell: "new",
-      protected: false,
     });
   });
 
-  // 3.5 ── Strips description from output ──────────────────────────
   it("strips description from written output", () => {
     const cwd = join(tmpRoot, "strip-desc");
     mkdirSync(cwd, { recursive: true });
 
-    installRule(cwd, "my-rule", {
-      description: "This should NOT appear in the file.",
+    installRule(cwd, "some/repo", "my-rule", {
+      description: "This should NOT appear.",
       hook: "tool_call",
       shell: "false",
     });
@@ -503,20 +450,16 @@ describe("installRule", () => {
     const raw = readFileSync(join(cwd, ".pi", "asserts.json"), "utf-8");
     const parsed = JSON.parse(raw);
 
-    assert.strictEqual("description" in parsed["my-rule"], false);
-    assert.deepStrictEqual(parsed["my-rule"], {
-      hook: "tool_call",
-      shell: "false",
-      protected: false,
-    });
+    const entry = parsed["some/repo"]["my-rule"];
+    assert.strictEqual("description" in entry, false);
+    assert.deepStrictEqual(entry, { hook: "tool_call", shell: "false" });
   });
 
-  // 3.6 ── Only writes schema-valid fields ─────────────────────────
-  it("only writes hook, shell, filter, when, default", () => {
+  it("only writes schema-valid fields", () => {
     const cwd = join(tmpRoot, "schema-fields");
     mkdirSync(cwd, { recursive: true });
 
-    installRule(cwd, "my-rule", {
+    installRule(cwd, "some/repo", "my-rule", {
       description: "stripped",
       hook: "tool_call",
       shell: "false",
@@ -524,19 +467,17 @@ describe("installRule", () => {
 
     const raw = readFileSync(join(cwd, ".pi", "asserts.json"), "utf-8");
     const parsed = JSON.parse(raw);
-    const keys = Object.keys(parsed["my-rule"]).sort();
+    const keys = Object.keys(parsed["some/repo"]["my-rule"]).sort();
 
-    assert.deepStrictEqual(keys, ["hook", "protected", "shell"]);
+    assert.deepStrictEqual(keys, ["hook", "shell"]);
   });
 
-  // 3.7 ── Handles broken existing JSON ────────────────────────────
   it("handles broken existing JSON (starts fresh)", () => {
     const cwd = join(tmpRoot, "broken-json");
     mkdirSync(join(cwd, ".pi"), { recursive: true });
     writeFileSync(join(cwd, ".pi", "asserts.json"), "{not valid json!!!");
 
-    // Should not throw
-    installRule(cwd, "my-rule", {
+    installRule(cwd, "some/repo", "my-rule", {
       description: "Test.",
       hook: "tool_call",
       shell: "true",
@@ -545,17 +486,17 @@ describe("installRule", () => {
     const raw = readFileSync(join(cwd, ".pi", "asserts.json"), "utf-8");
     const parsed = JSON.parse(raw);
 
-    assert.deepStrictEqual(parsed, {
-      "my-rule": { hook: "tool_call", shell: "true", protected: false },
+    assert.deepStrictEqual(parsed["some/repo"], {
+      "my-rule": { hook: "tool_call", shell: "true" },
     });
+    assert.deepStrictEqual(parsed.repos, ["some/repo"]);
   });
 
-  // 3.8 ── Writes filter when present ──────────────────────────────
   it("writes filter when present", () => {
     const cwd = join(tmpRoot, "with-filter");
     mkdirSync(cwd, { recursive: true });
 
-    installRule(cwd, "my-rule", {
+    installRule(cwd, "some/repo", "my-rule", {
       description: "Test.",
       hook: "tool_call",
       filter: { toolName: "write" },
@@ -565,15 +506,17 @@ describe("installRule", () => {
     const raw = readFileSync(join(cwd, ".pi", "asserts.json"), "utf-8");
     const parsed = JSON.parse(raw);
 
-    assert.deepStrictEqual(parsed["my-rule"].filter, { toolName: "write" });
+    assert.deepStrictEqual(
+      parsed["some/repo"]["my-rule"].filter,
+      { toolName: "write" },
+    );
   });
 
-  // 3.9 ── Writes when when present ────────────────────────────────
   it("writes when when present", () => {
     const cwd = join(tmpRoot, "with-when");
     mkdirSync(cwd, { recursive: true });
 
-    installRule(cwd, "my-rule", {
+    installRule(cwd, "some/repo", "my-rule", {
       description: "Test.",
       hook: "tool_call",
       when: "git diff --quiet",
@@ -583,15 +526,17 @@ describe("installRule", () => {
     const raw = readFileSync(join(cwd, ".pi", "asserts.json"), "utf-8");
     const parsed = JSON.parse(raw);
 
-    assert.strictEqual(parsed["my-rule"].when, "git diff --quiet");
+    assert.strictEqual(
+      parsed["some/repo"]["my-rule"].when,
+      "git diff --quiet",
+    );
   });
 
-  // 3.10 ── Writes default when present ────────────────────────────
   it("writes default when present", () => {
     const cwd = join(tmpRoot, "with-default");
     mkdirSync(cwd, { recursive: true });
 
-    installRule(cwd, "my-rule", {
+    installRule(cwd, "some/repo", "my-rule", {
       description: "Test.",
       hook: "tool_call",
       shell: "false",
@@ -601,15 +546,14 @@ describe("installRule", () => {
     const raw = readFileSync(join(cwd, ".pi", "asserts.json"), "utf-8");
     const parsed = JSON.parse(raw);
 
-    assert.strictEqual(parsed["my-rule"].default, true);
+    assert.strictEqual(parsed["some/repo"]["my-rule"].default, true);
   });
 
-  // 3.11 ── Omits optional fields when absent ──────────────────────
   it("omits optional fields when absent", () => {
     const cwd = join(tmpRoot, "no-optionals");
     mkdirSync(cwd, { recursive: true });
 
-    installRule(cwd, "my-rule", {
+    installRule(cwd, "some/repo", "my-rule", {
       description: "Test.",
       hook: "tool_call",
       shell: "false",
@@ -617,17 +561,16 @@ describe("installRule", () => {
 
     const raw = readFileSync(join(cwd, ".pi", "asserts.json"), "utf-8");
     const parsed = JSON.parse(raw);
-    const keys = Object.keys(parsed["my-rule"]).sort();
+    const keys = Object.keys(parsed["some/repo"]["my-rule"]).sort();
 
-    assert.deepStrictEqual(keys, ["hook", "protected", "shell"]);
+    assert.deepStrictEqual(keys, ["hook", "shell"]);
   });
 
-  // 3.12 ── Writes all optional fields together ────────────────────
   it("writes all optional fields when all present", () => {
     const cwd = join(tmpRoot, "all-fields");
     mkdirSync(cwd, { recursive: true });
 
-    installRule(cwd, "my-rule", {
+    installRule(cwd, "some/repo", "my-rule", {
       description: "Test.",
       hook: "tool_call",
       filter: { toolName: "bash" },
@@ -638,14 +581,36 @@ describe("installRule", () => {
 
     const raw = readFileSync(join(cwd, ".pi", "asserts.json"), "utf-8");
     const parsed = JSON.parse(raw);
-    const keys = Object.keys(parsed["my-rule"]).sort();
+    const keys = Object.keys(parsed["some/repo"]["my-rule"]).sort();
 
-    assert.deepStrictEqual(keys, ["default", "filter", "hook", "protected", "shell", "when"]);
-    assert.strictEqual(parsed["my-rule"].default, true);
-    assert.deepStrictEqual(parsed["my-rule"].filter, { toolName: "bash" });
-    assert.strictEqual(parsed["my-rule"].hook, "tool_call");
-    assert.strictEqual(parsed["my-rule"].shell, "false");
-    assert.strictEqual(parsed["my-rule"].when, "true");
+    assert.deepStrictEqual(keys, ["default", "filter", "hook", "shell", "when"]);
+  });
+
+  it("installs into a second repo without clobbering the first", () => {
+    const cwd = join(tmpRoot, "two-repos");
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+
+    installRule(cwd, "repo/a", "rule1", {
+      description: "First.",
+      hook: "tool_call",
+      shell: "true",
+    });
+    installRule(cwd, "repo/b", "rule2", {
+      description: "Second.",
+      hook: "tool_call",
+      shell: "false",
+    });
+
+    const raw = readFileSync(join(cwd, ".pi", "asserts.json"), "utf-8");
+    const parsed = JSON.parse(raw);
+
+    assert.deepStrictEqual(parsed["repo/a"], {
+      rule1: { hook: "tool_call", shell: "true" },
+    });
+    assert.deepStrictEqual(parsed["repo/b"], {
+      rule2: { hook: "tool_call", shell: "false" },
+    });
+    assert.deepStrictEqual(parsed.repos, ["repo/a", "repo/b"]);
   });
 });
 
@@ -654,74 +619,208 @@ describe("installRule", () => {
 // ═══════════════════════════════════════════════════════════════════
 
 describe("removeRule", () => {
-  // 4.1 ── Removes an existing assert ──────────────────────────────
-  it("removes an existing assert", () => {
+  it("removes an existing assert from a repo section", () => {
     const cwd = join(tmpRoot, "remove-existing");
     mkdirSync(join(cwd, ".pi"), { recursive: true });
     writeFileSync(
       join(cwd, ".pi", "asserts.json"),
       JSON.stringify({
-        "keep-me": { hook: "tool_call", shell: "true" },
-        "drop-me": { hook: "tool_call", shell: "false" },
+        local: { "keep-me": { hook: "tool_call", shell: "true" } },
+        "some/repo": { "drop-me": { hook: "tool_call", shell: "false" } },
       }),
     );
 
-    const result = removeRule(cwd, "drop-me");
+    const result = removeRule(cwd, "some/repo", "drop-me");
     assert.strictEqual(result, true);
 
     const raw = readFileSync(join(cwd, ".pi", "asserts.json"), "utf-8");
     const parsed = JSON.parse(raw);
 
     assert.strictEqual(Object.keys(parsed).length, 1);
-    assert.ok("keep-me" in parsed);
-    assert.strictEqual("drop-me" in parsed, false);
+    assert.ok("local" in parsed);
+    assert.strictEqual("some/repo" in parsed, false); // section pruned
   });
 
-  // 4.2 ── No-op when assert doesn't exist ─────────────────────────
+  it("prunes empty repo section", () => {
+    const cwd = join(tmpRoot, "prune-section");
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".pi", "asserts.json"),
+      JSON.stringify({
+        "some/repo": { "only-me": { hook: "tool_call", shell: "true" } },
+      }),
+    );
+
+    removeRule(cwd, "some/repo", "only-me");
+
+    const raw = readFileSync(join(cwd, ".pi", "asserts.json"), "utf-8");
+    const parsed = JSON.parse(raw);
+
+    assert.strictEqual(Object.keys(parsed).length, 0);
+  });
+
   it("returns false when assert not found", () => {
     const cwd = join(tmpRoot, "remove-missing");
     mkdirSync(join(cwd, ".pi"), { recursive: true });
     writeFileSync(
       join(cwd, ".pi", "asserts.json"),
-      JSON.stringify({ "my-rule": { hook: "tool_call", shell: "true" } }),
+      JSON.stringify({
+        "some/repo": { "my-rule": { hook: "tool_call", shell: "true" } },
+      }),
     );
 
-    const result = removeRule(cwd, "nonexistent");
+    const result = removeRule(cwd, "some/repo", "nonexistent");
     assert.strictEqual(result, false);
   });
 
-  // 4.3 ── Returns false when file doesn't exist ───────────────────
+  it("returns false when repo section missing", () => {
+    const cwd = join(tmpRoot, "remove-no-repo");
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".pi", "asserts.json"),
+      JSON.stringify({
+        local: { "my-rule": { hook: "tool_call", shell: "true" } },
+      }),
+    );
+
+    const result = removeRule(cwd, "other/repo", "anything");
+    assert.strictEqual(result, false);
+  });
+
   it("returns false when file missing", () => {
-    const result = removeRule(join(tmpRoot, "no-file"), "anything");
+    const result = removeRule(join(tmpRoot, "no-file"), "any/repo", "anything");
     assert.strictEqual(result, false);
   });
 
-  // 4.4 ── Handles broken JSON ────────────────────────────────────
   it("returns false on broken JSON", () => {
     const cwd = join(tmpRoot, "remove-broken");
     mkdirSync(join(cwd, ".pi"), { recursive: true });
     writeFileSync(join(cwd, ".pi", "asserts.json"), "not json!!!");
 
-    const result = removeRule(cwd, "anything");
+    const result = removeRule(cwd, "any/repo", "anything");
     assert.strictEqual(result, false);
   });
+});
 
-  // 4.5 ── Removes last assert (file becomes empty object) ─────────
-  it("leaves empty object when removing last assert", () => {
-    const cwd = join(tmpRoot, "remove-last");
+// ═══════════════════════════════════════════════════════════════════
+// getInstalledRepos
+// ═══════════════════════════════════════════════════════════════════
+
+describe("getInstalledRepos", () => {
+  it("returns repo keys (excluding local and $schema)", () => {
+    const cwd = join(tmpRoot, "installed-repos");
     mkdirSync(join(cwd, ".pi"), { recursive: true });
     writeFileSync(
       join(cwd, ".pi", "asserts.json"),
-      JSON.stringify({ "only-me": { hook: "tool_call", shell: "true" } }),
+      JSON.stringify({
+        $schema: "https://example.com/schema.json",
+        repos: ["meffmadd/pi-assert-rules", "other/repo"],
+        local: { rule: { hook: "tool_call", shell: "true" } },
+        "meffmadd/pi-assert-rules": { block: { hook: "tool_call", shell: "false" } },
+        "other/repo": { another: { hook: "tool_call", shell: "true" } },
+      }),
     );
 
-    const result = removeRule(cwd, "only-me");
-    assert.strictEqual(result, true);
+    const repos = getInstalledRepos(cwd);
+    assert.deepStrictEqual(repos.sort(), [
+      "meffmadd/pi-assert-rules",
+      "other/repo",
+    ]);
+  });
 
+  it("returns [] when no repo sections exist", () => {
+    const cwd = join(tmpRoot, "no-repos");
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".pi", "asserts.json"),
+      JSON.stringify({
+        local: { rule: { hook: "tool_call", shell: "true" } },
+      }),
+    );
+
+    const repos = getInstalledRepos(cwd);
+    assert.deepStrictEqual(repos, []);
+  });
+
+  it("returns [] when file missing", () => {
+    const repos = getInstalledRepos(join(tmpRoot, "no-file"));
+    assert.deepStrictEqual(repos, []);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// addRepo
+// ═══════════════════════════════════════════════════════════════════
+
+describe("addRepo", () => {
+  it("adds a repo to the repos array", () => {
+    const cwd = join(tmpRoot, "add-repo-fresh");
+    mkdirSync(cwd, { recursive: true });
+
+    addRepo(cwd, "meffmadd/pi-assert-rules");
+
+    const repos = getInstalledRepos(cwd);
+    assert.deepStrictEqual(repos, ["meffmadd/pi-assert-rules"]);
+  });
+
+  it("appends to existing repos", () => {
+    const cwd = join(tmpRoot, "add-repo-append");
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".pi", "asserts.json"),
+      JSON.stringify({
+        repos: ["repo/a"],
+        local: { rule: { hook: "tool_call", shell: "true" } },
+      }),
+    );
+
+    addRepo(cwd, "repo/b");
+
+    const repos = getInstalledRepos(cwd);
+    assert.deepStrictEqual(repos, ["repo/a", "repo/b"]);
+  });
+
+  it("no-op when repo already present", () => {
+    const cwd = join(tmpRoot, "add-repo-dup");
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".pi", "asserts.json"),
+      JSON.stringify({
+        repos: ["repo/a"],
+      }),
+    );
+
+    addRepo(cwd, "repo/a");
+
+    const repos = getInstalledRepos(cwd);
+    assert.deepStrictEqual(repos, ["repo/a"]);
+  });
+
+  it("throws on invalid format (no slash)", () => {
+    const cwd = join(tmpRoot, "add-repo-bad");
+    mkdirSync(cwd, { recursive: true });
+
+    assert.throws(() => addRepo(cwd, "not-a-repo"), /Invalid repo format/);
+  });
+
+  it("preserves local section when adding repo", () => {
+    const cwd = join(tmpRoot, "add-repo-local");
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".pi", "asserts.json"),
+      JSON.stringify({
+        local: { rule: { hook: "tool_call", shell: "true" } },
+      }),
+    );
+
+    addRepo(cwd, "some/repo");
+
+    const repos = getInstalledRepos(cwd);
+    assert.deepStrictEqual(repos, ["some/repo"]);
+
+    // local still intact
     const raw = readFileSync(join(cwd, ".pi", "asserts.json"), "utf-8");
     const parsed = JSON.parse(raw);
-
-    assert.strictEqual(typeof parsed, "object");
-    assert.strictEqual(Object.keys(parsed).length, 0);
+    assert.ok("local" in parsed);
   });
 });

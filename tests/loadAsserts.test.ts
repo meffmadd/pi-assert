@@ -1,5 +1,5 @@
 /**
- * Tests for loadAsserts — config loading & merge.
+ * Tests for loadAsserts — config loading & merge with sectioned format.
  *
  * Usage: npm test
  */
@@ -37,7 +37,6 @@ function clearGlobal() {
 
 function makeProject(rel: string, json: object) {
   const dir = join(tmpRoot, rel);
-  // Wipe any leftover project dir from a previous run
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* ok */ }
   mkdirSync(join(dir, ".pi"), { recursive: true });
   writeFileSync(join(dir, ".pi", "asserts.json"), JSON.stringify(json, null, 2));
@@ -65,21 +64,24 @@ describe("loadAsserts", () => {
     assert.deepStrictEqual(result, []);
   });
 
-  // 1.2 ── Project-only file ───────────────────────────────────────
+  // 1.2 ── Project-only file (local section) ───────────────────────
 
-  it("project-only file → loads 1 assert", () => {
+  it("project-only file (local) → loads 1 assert", () => {
     clearGlobal();
     makeProject("proj-only", {
-      unmodified: {
-        hook: "tool_call",
-        filter: { toolName: "write" },
-        shell: "false",
+      local: {
+        unmodified: {
+          hook: "tool_call",
+          filter: { toolName: "write" },
+          shell: "false",
+        },
       },
     });
 
     const result = loadAsserts(join(tmpRoot, "proj-only"));
     assert.strictEqual(result.length, 1);
     assert.strictEqual(result[0].name, "unmodified");
+    assert.strictEqual(result[0].source, "local");
     assert.strictEqual(result[0].hook, "tool_call");
     assert.deepStrictEqual(result[0].filter, { toolName: "write" });
     assert.strictEqual(result[0].shell, "false");
@@ -93,10 +95,12 @@ describe("loadAsserts", () => {
     mkdirSync(cwd, { recursive: true });
 
     makeGlobal({
-      "no-secrets": {
-        hook: "tool_call",
-        filter: { toolName: "bash" },
-        shell: 'grep -q SECRET <<< "$PI_TOOL_INPUT" && exit 1 || exit 0',
+      local: {
+        "no-secrets": {
+          hook: "tool_call",
+          filter: { toolName: "bash" },
+          shell: 'grep -q SECRET <<< "$PI_TOOL_INPUT" && exit 1 || exit 0',
+        },
       },
     });
 
@@ -107,27 +111,31 @@ describe("loadAsserts", () => {
     assert.deepStrictEqual(result[0].filter, { toolName: "bash" });
   });
 
-  // 1.4 ── Project overrides global by key ─────────────────────────
+  // 1.4 ── Project overrides global by source+name ─────────────────
 
-  it("project overrides global by key name", () => {
+  it("project overrides global by source+name", () => {
     clearGlobal();
     makeGlobal({
-      "no-secrets": {
-        hook: "tool_call",
-        filter: { toolName: "bash" },
-        shell: "grep -q SECRET",
-      },
-      "global-only": {
-        hook: "tool_call",
-        shell: "false",
+      local: {
+        "no-secrets": {
+          hook: "tool_call",
+          filter: { toolName: "bash" },
+          shell: "grep -q SECRET",
+        },
+        "global-only": {
+          hook: "tool_call",
+          shell: "false",
+        },
       },
     });
 
     makeProject("proj-override", {
-      "no-secrets": {
-        hook: "tool_call",
-        filter: { toolName: "bash" },
-        shell: "exit 0",
+      local: {
+        "no-secrets": {
+          hook: "tool_call",
+          filter: { toolName: "bash" },
+          shell: "exit 0",
+        },
       },
     });
 
@@ -146,10 +154,12 @@ describe("loadAsserts", () => {
   it("invalid entries = silently skipped", () => {
     clearGlobal();
     makeProject("invalid-entries", {
-      "valid-one": { hook: "tool_call", shell: "true" },
-      "no-hook": { shell: "true" },
-      "no-shell": { hook: "tool_call" },
-      "null-val": null as any,
+      local: {
+        "valid-one": { hook: "tool_call", shell: "true" },
+        "no-hook": { shell: "true" },
+        "no-shell": { hook: "tool_call" },
+        "null-val": null as any,
+      },
     });
 
     const result = loadAsserts(join(tmpRoot, "invalid-entries"));
@@ -160,8 +170,10 @@ describe("loadAsserts", () => {
   it("all entries invalid → []", () => {
     clearGlobal();
     makeProject("all-invalid", {
-      x: { shell: "true" },
-      y: { hook: "tool_call" },
+      local: {
+        x: { shell: "true" },
+        y: { hook: "tool_call" },
+      },
     });
 
     const result = loadAsserts(join(tmpRoot, "all-invalid"));
@@ -194,9 +206,11 @@ describe("loadAsserts", () => {
   it("assert without filter → filter is undefined", () => {
     clearGlobal();
     makeProject("no-filter", {
-      "catch-all": {
-        hook: "tool_call",
-        shell: "false",
+      local: {
+        "catch-all": {
+          hook: "tool_call",
+          shell: "false",
+        },
       },
     });
 
@@ -211,10 +225,12 @@ describe("loadAsserts", () => {
   it("default: true in JSON → Assert.default = true", () => {
     clearGlobal();
     makeProject("default-true", {
-      guard: {
-        hook: "tool_call",
-        shell: "false",
-        default: true,
+      local: {
+        guard: {
+          hook: "tool_call",
+          shell: "false",
+          default: true,
+        },
       },
     });
 
@@ -229,10 +245,12 @@ describe("loadAsserts", () => {
   it("default: false in JSON → Assert.default = false", () => {
     clearGlobal();
     makeProject("default-false", {
-      guard: {
-        hook: "tool_call",
-        shell: "false",
-        default: false,
+      local: {
+        guard: {
+          hook: "tool_call",
+          shell: "false",
+          default: false,
+        },
       },
     });
 
@@ -247,9 +265,11 @@ describe("loadAsserts", () => {
   it("default omitted → Assert.default = false", () => {
     clearGlobal();
     makeProject("default-omitted", {
-      guard: {
-        hook: "tool_call",
-        shell: "false",
+      local: {
+        guard: {
+          hook: "tool_call",
+          shell: "false",
+        },
       },
     });
 
@@ -263,9 +283,11 @@ describe("loadAsserts", () => {
   it("mixed defaults → each assert gets its own default value", () => {
     clearGlobal();
     makeProject("default-mixed", {
-      active: { hook: "tool_call", shell: "false", default: true },
-      inactive: { hook: "tool_call", shell: "true", default: false },
-      unspecified: { hook: "tool_call", shell: "true" },
+      local: {
+        active: { hook: "tool_call", shell: "false", default: true },
+        inactive: { hook: "tool_call", shell: "true", default: false },
+        unspecified: { hook: "tool_call", shell: "true" },
+      },
     });
 
     const result = loadAsserts(join(tmpRoot, "default-mixed"));
@@ -281,15 +303,17 @@ describe("loadAsserts", () => {
     assert.strictEqual(unspecified.default, false);
   });
 
-  // 1.14 ── when field (precondition) ───────────────────────────────
+  // 1.13 ── when field (precondition) ───────────────────────────────
 
   it("when field present → Assert.when is the string", () => {
     clearGlobal();
     makeProject("when-present", {
-      conditional: {
-        hook: "tool_call",
-        shell: "false",
-        when: '[ "$PI_TOOL_NAME" = write ]',
+      local: {
+        conditional: {
+          hook: "tool_call",
+          shell: "false",
+          when: '[ "$PI_TOOL_NAME" = write ]',
+        },
       },
     });
 
@@ -303,9 +327,11 @@ describe("loadAsserts", () => {
   it("when field absent → Assert.when is undefined", () => {
     clearGlobal();
     makeProject("when-absent", {
-      simple: {
-        hook: "tool_call",
-        shell: "true",
+      local: {
+        simple: {
+          hook: "tool_call",
+          shell: "true",
+        },
       },
     });
 
@@ -317,11 +343,13 @@ describe("loadAsserts", () => {
   it("when field alongside filter → both loaded", () => {
     clearGlobal();
     makeProject("when-with-filter", {
-      guarded: {
-        hook: "tool_call",
-        filter: { toolName: "bash" },
-        when: "true",
-        shell: "false",
+      local: {
+        guarded: {
+          hook: "tool_call",
+          filter: { toolName: "bash" },
+          when: "true",
+          shell: "false",
+        },
       },
     });
 
@@ -333,19 +361,193 @@ describe("loadAsserts", () => {
     assert.strictEqual(result[0].shell, "false");
   });
 
-  // 1.13 ── Multiple valid asserts in one file ──────────────────────
+  // 1.14 ── Multiple valid asserts in one file ──────────────────────
 
   it("multiple valid asserts → all loaded", () => {
     clearGlobal();
     makeProject("multi", {
-      a: { hook: "tool_call", shell: "true" },
-      b: { hook: "tool_call", filter: { toolName: "read" }, shell: "false" },
-      c: { hook: "tool_call", filter: { toolName: "bash" }, shell: "grep x" },
+      local: {
+        a: { hook: "tool_call", shell: "true" },
+        b: { hook: "tool_call", filter: { toolName: "read" }, shell: "false" },
+        c: { hook: "tool_call", filter: { toolName: "bash" }, shell: "grep x" },
+      },
     });
 
     const result = loadAsserts(join(tmpRoot, "multi"));
     assert.strictEqual(result.length, 3);
     const names = result.map((a) => a.name).sort();
     assert.deepStrictEqual(names, ["a", "b", "c"]);
+  });
+
+  // ── Section-based tests ──────────────────────────────────────────
+
+  // 1.15 ── Multiple sections ───────────────────────────────────────
+
+  it("multiple sections → all loaded with correct source", () => {
+    clearGlobal();
+    makeProject("multi-section", {
+      local: {
+        "my-rule": { hook: "tool_call", shell: "false" },
+      },
+      "meffmadd/pi-assert-rules": {
+        "block-write": { hook: "tool_call", shell: "false" },
+      },
+    });
+
+    const result = loadAsserts(join(tmpRoot, "multi-section"));
+    assert.strictEqual(result.length, 2);
+
+    const local = result.find((a) => a.source === "local")!;
+    assert.strictEqual(local.name, "my-rule");
+
+    const repo = result.find((a) => a.source === "meffmadd/pi-assert-rules")!;
+    assert.strictEqual(repo.name, "block-write");
+  });
+
+  // 1.16 ── $schema key is ignored ──────────────────────────────────
+
+  it("$schema key is ignored", () => {
+    clearGlobal();
+    makeProject("with-schema", {
+      $schema: "https://example.com/schema.json",
+      local: {
+        "my-rule": { hook: "tool_call", shell: "false" },
+      },
+    });
+
+    const result = loadAsserts(join(tmpRoot, "with-schema"));
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].name, "my-rule");
+  });
+
+  // 1.17 ── Project repo overrides global repo ──────────────────────
+
+  it("project repo overrides global repo by source+name", () => {
+    clearGlobal();
+    makeGlobal({
+      "meffmadd/pi-assert-rules": {
+        "block-write": { hook: "tool_call", shell: "false" },
+        "other-rule": { hook: "tool_call", shell: "true" },
+      },
+    });
+
+    makeProject("repo-override", {
+      "meffmadd/pi-assert-rules": {
+        "block-write": { hook: "tool_call", shell: "exit 1" },
+      },
+    });
+
+    const result = loadAsserts(join(tmpRoot, "repo-override"));
+    assert.strictEqual(result.length, 2);
+
+    const overridden = result.find(
+      (a) => a.name === "block-write",
+    )!;
+    assert.strictEqual(overridden.shell, "exit 1"); // project wins
+    assert.strictEqual(overridden.source, "meffmadd/pi-assert-rules");
+
+    const other = result.find((a) => a.name === "other-rule")!;
+    assert.strictEqual(other.shell, "true"); // global passed through
+  });
+
+  // 1.18 ── Same name in different sections → both loaded ──────────
+
+  it("same name, different source → both loaded", () => {
+    clearGlobal();
+    makeProject("name-collision", {
+      local: {
+        guard: { hook: "tool_call", shell: "false" },
+      },
+      "other/repo": {
+        guard: { hook: "tool_call", shell: "true" },
+      },
+    });
+
+    const result = loadAsserts(join(tmpRoot, "name-collision"));
+    assert.strictEqual(result.length, 2);
+
+    const guards = result.filter((a) => a.name === "guard");
+    assert.strictEqual(guards.length, 2);
+
+    const sources = guards.map((a) => a.source).sort();
+    assert.deepStrictEqual(sources, ["local", "other/repo"]);
+  });
+
+  // 1.19 ── Empty local section → skipped ──────────────────────────
+
+  it("empty local section → skipped", () => {
+    clearGlobal();
+    makeProject("empty-local", {
+      local: {},
+      "other/repo": {
+        rule: { hook: "tool_call", shell: "true" },
+      },
+    });
+
+    const result = loadAsserts(join(tmpRoot, "empty-local"));
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].source, "other/repo");
+  });
+
+  // 1.20 ── Non-object top-level values → skipped ──────────────────
+
+  it("non-object top-level values → skipped", () => {
+    clearGlobal();
+    makeProject("non-object-section", {
+      local: {
+        guard: { hook: "tool_call", shell: "true" },
+      },
+      bad: "not an object" as any,
+    });
+
+    const result = loadAsserts(join(tmpRoot, "non-object-section"));
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].name, "guard");
+  });
+
+  // 1.21 ── repos array filters which sections are loaded ──────────
+
+  it("repos array → only declared repo sections load", () => {
+    clearGlobal();
+    makeProject("repos-filter", {
+      repos: ["repo/a"],
+      local: { guard: { hook: "tool_call", shell: "true" } },
+      "repo/a": { rule1: { hook: "tool_call", shell: "true" } },
+      "repo/b": { rule2: { hook: "tool_call", shell: "true" } },
+    });
+
+    const result = loadAsserts(join(tmpRoot, "repos-filter"));
+    // local + repo/a = 2 asserts, repo/b is ignored
+    assert.strictEqual(result.length, 2);
+    const names = result.map((a) => a.name).sort();
+    assert.deepStrictEqual(names, ["guard", "rule1"]);
+  });
+
+  // 1.22 ── Missing repos array → all sections load (backward compat)
+
+  it("missing repos → all object sections loaded", () => {
+    clearGlobal();
+    makeProject("no-repos-array", {
+      local: { guard: { hook: "tool_call", shell: "true" } },
+      "repo/a": { rule1: { hook: "tool_call", shell: "true" } },
+      "repo/b": { rule2: { hook: "tool_call", shell: "true" } },
+    });
+
+    const result = loadAsserts(join(tmpRoot, "no-repos-array"));
+    assert.strictEqual(result.length, 3);
+  });
+
+  // 1.23 ── repos key itself is skipped (not a section) ───────────
+
+  it("repos key is not treated as a section", () => {
+    clearGlobal();
+    makeProject("repos-not-section", {
+      repos: ["repo/a"],
+      local: { guard: { hook: "tool_call", shell: "true" } },
+    });
+
+    const result = loadAsserts(join(tmpRoot, "repos-not-section"));
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].source, "local");
   });
 });
