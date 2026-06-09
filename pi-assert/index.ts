@@ -251,9 +251,10 @@ export default function (pi: ExtensionAPI) {
                   tui.requestRender();
                   return;
                 }
-                // Append printable character
-                if (data.length === 1 && data >= " ") {
-                  buffer += data;
+                // Append printable characters (supports paste)
+                const filtered = data.replace(/[\x00-\x1F\x7F]/g, '');
+                if (filtered.length > 0) {
+                  buffer += filtered;
                   tui.requestRender();
                 }
               },
