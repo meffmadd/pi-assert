@@ -58,28 +58,24 @@ function setupCwd(index: number, json?: object): string {
 
 describe("loadAsserts", () => {
 
-  // ── Cases: [label, projectJson?, globalJson?, expected: Assert[]] ─
-
-  type Case = [
-    label: string,
-    projectJson: Record<string, unknown> | undefined,
-    globalJson: Record<string, unknown> | undefined,
-    expected: Assert[],
-  ];
+  type Case = {
+    label: string;
+    projectJson?: Record<string, unknown>;
+    globalJson?: Record<string, unknown>;
+    expected: Assert[];
+  };
 
   const cases: Case[] = [
     // 1.1 ── Empty state (no files)
-    [
-      "empty state — no files exist → []",
-      undefined,
-      undefined,
-      [],
-    ],
+    {
+      label: "empty state — no files exist → []",
+      expected: [],
+    },
 
     // 1.2 ── Project-only file (local section)
-    [
-      "project-only file (local) → loads 1 assert",
-      {
+    {
+      label: "project-only file (local) → loads 1 assert",
+      projectJson: {
         local: {
           unmodified: {
             hook: "tool_call",
@@ -88,8 +84,7 @@ describe("loadAsserts", () => {
           },
         },
       },
-      undefined,
-      [
+      expected: [
         {
           name: "unmodified",
           source: "local",
@@ -100,13 +95,12 @@ describe("loadAsserts", () => {
           default: false,
         },
       ],
-    ],
+    },
 
     // 1.3 ── Global-only file
-    [
-      "global-only file → loads 1 assert",
-      undefined,
-      {
+    {
+      label: "global-only file → loads 1 assert",
+      globalJson: {
         local: {
           "no-secrets": {
             hook: "tool_call",
@@ -115,7 +109,7 @@ describe("loadAsserts", () => {
           },
         },
       },
-      [
+      expected: [
         {
           name: "no-secrets",
           source: "local",
@@ -126,12 +120,12 @@ describe("loadAsserts", () => {
           default: false,
         },
       ],
-    ],
+    },
 
     // 1.4 ── Project overrides global by source+name
-    [
-      "project overrides global by source+name",
-      {
+    {
+      label: "project overrides global by source+name",
+      projectJson: {
         local: {
           "no-secrets": {
             hook: "tool_call",
@@ -140,7 +134,7 @@ describe("loadAsserts", () => {
           },
         },
       },
-      {
+      globalJson: {
         local: {
           "no-secrets": {
             hook: "tool_call",
@@ -153,7 +147,7 @@ describe("loadAsserts", () => {
           },
         },
       },
-      [
+      expected: [
         {
           name: "no-secrets",
           source: "local",
@@ -173,12 +167,12 @@ describe("loadAsserts", () => {
           default: false,
         },
       ],
-    ],
+    },
 
     // 1.5 ── Invalid entries silently skipped
-    [
-      "invalid entries = silently skipped",
-      {
+    {
+      label: "invalid entries = silently skipped",
+      projectJson: {
         local: {
           "valid-one": { hook: "tool_call", shell: "true" },
           "no-hook": { shell: "true" },
@@ -186,8 +180,7 @@ describe("loadAsserts", () => {
           "null-val": null,
         },
       } as Record<string, unknown>,
-      undefined,
-      [
+      expected: [
         {
           name: "valid-one",
           source: "local",
@@ -198,32 +191,30 @@ describe("loadAsserts", () => {
           default: false,
         },
       ],
-    ],
+    },
 
-    [
-      "all entries invalid → []",
-      {
+    {
+      label: "all entries invalid → []",
+      projectJson: {
         local: {
           x: { shell: "true" },
           y: { hook: "tool_call" },
         },
       },
-      undefined,
-      [],
-    ],
+      expected: [],
+    },
 
     // 1.6 ── Empty JSON object → []
-    [
-      "empty json object → []",
-      {},
-      undefined,
-      [],
-    ],
+    {
+      label: "empty json object → []",
+      projectJson: {},
+      expected: [],
+    },
 
     // 1.8 ── Assert without filter → filter is undefined
-    [
-      "assert without filter → filter is undefined",
-      {
+    {
+      label: "assert without filter → filter is undefined",
+      projectJson: {
         local: {
           "catch-all": {
             hook: "tool_call",
@@ -231,8 +222,7 @@ describe("loadAsserts", () => {
           },
         },
       },
-      undefined,
-      [
+      expected: [
         {
           name: "catch-all",
           source: "local",
@@ -243,12 +233,12 @@ describe("loadAsserts", () => {
           default: false,
         },
       ],
-    ],
+    },
 
     // 1.9 ── default: true
-    [
-      "default: true in JSON → Assert.default = true",
-      {
+    {
+      label: "default: true in JSON → Assert.default = true",
+      projectJson: {
         local: {
           guard: {
             hook: "tool_call",
@@ -257,8 +247,7 @@ describe("loadAsserts", () => {
           },
         },
       },
-      undefined,
-      [
+      expected: [
         {
           name: "guard",
           source: "local",
@@ -269,12 +258,12 @@ describe("loadAsserts", () => {
           default: true,
         },
       ],
-    ],
+    },
 
     // 1.10 ── default: false
-    [
-      "default: false in JSON → Assert.default = false",
-      {
+    {
+      label: "default: false in JSON → Assert.default = false",
+      projectJson: {
         local: {
           guard: {
             hook: "tool_call",
@@ -283,8 +272,7 @@ describe("loadAsserts", () => {
           },
         },
       },
-      undefined,
-      [
+      expected: [
         {
           name: "guard",
           source: "local",
@@ -295,12 +283,12 @@ describe("loadAsserts", () => {
           default: false,
         },
       ],
-    ],
+    },
 
     // 1.11 ── default omitted → false
-    [
-      "default omitted → Assert.default = false",
-      {
+    {
+      label: "default omitted → Assert.default = false",
+      projectJson: {
         local: {
           guard: {
             hook: "tool_call",
@@ -308,8 +296,7 @@ describe("loadAsserts", () => {
           },
         },
       },
-      undefined,
-      [
+      expected: [
         {
           name: "guard",
           source: "local",
@@ -320,20 +307,19 @@ describe("loadAsserts", () => {
           default: false,
         },
       ],
-    ],
+    },
 
     // 1.12 ── Mixed defaults
-    [
-      "mixed defaults → each assert gets its own default value",
-      {
+    {
+      label: "mixed defaults → each assert gets its own default value",
+      projectJson: {
         local: {
           active: { hook: "tool_call", shell: "false", default: true },
           inactive: { hook: "tool_call", shell: "true", default: false },
           unspecified: { hook: "tool_call", shell: "true" },
         },
       },
-      undefined,
-      [
+      expected: [
         {
           name: "active",
           source: "local",
@@ -362,12 +348,12 @@ describe("loadAsserts", () => {
           default: false,
         },
       ],
-    ],
+    },
 
     // 1.13 ── when field (precondition)
-    [
-      "when field present → Assert.when is the string",
-      {
+    {
+      label: "when field present → Assert.when is the string",
+      projectJson: {
         local: {
           conditional: {
             hook: "tool_call",
@@ -376,8 +362,7 @@ describe("loadAsserts", () => {
           },
         },
       },
-      undefined,
-      [
+      expected: [
         {
           name: "conditional",
           source: "local",
@@ -388,11 +373,11 @@ describe("loadAsserts", () => {
           default: false,
         },
       ],
-    ],
+    },
 
-    [
-      "when field absent → Assert.when is undefined",
-      {
+    {
+      label: "when field absent → Assert.when is undefined",
+      projectJson: {
         local: {
           simple: {
             hook: "tool_call",
@@ -400,8 +385,7 @@ describe("loadAsserts", () => {
           },
         },
       },
-      undefined,
-      [
+      expected: [
         {
           name: "simple",
           source: "local",
@@ -412,11 +396,11 @@ describe("loadAsserts", () => {
           default: false,
         },
       ],
-    ],
+    },
 
-    [
-      "when field alongside filter → both loaded",
-      {
+    {
+      label: "when field alongside filter → both loaded",
+      projectJson: {
         local: {
           guarded: {
             hook: "tool_call",
@@ -426,8 +410,7 @@ describe("loadAsserts", () => {
           },
         },
       },
-      undefined,
-      [
+      expected: [
         {
           name: "guarded",
           source: "local",
@@ -438,20 +421,19 @@ describe("loadAsserts", () => {
           default: false,
         },
       ],
-    ],
+    },
 
     // 1.14 ── Multiple valid asserts in one file
-    [
-      "multiple valid asserts → all loaded",
-      {
+    {
+      label: "multiple valid asserts → all loaded",
+      projectJson: {
         local: {
           a: { hook: "tool_call", shell: "true" },
           b: { hook: "tool_call", filter: { toolName: "read" }, shell: "false" },
           c: { hook: "tool_call", filter: { toolName: "bash" }, shell: "grep x" },
         },
       },
-      undefined,
-      [
+      expected: [
         {
           name: "a",
           source: "local",
@@ -480,12 +462,12 @@ describe("loadAsserts", () => {
           default: false,
         },
       ],
-    ],
+    },
 
     // 1.15 ── Multiple sections
-    [
-      "multiple sections → all loaded with correct source",
-      {
+    {
+      label: "multiple sections → all loaded with correct source",
+      projectJson: {
         local: {
           "my-rule": { hook: "tool_call", shell: "false" },
         },
@@ -493,8 +475,7 @@ describe("loadAsserts", () => {
           "block-write": { hook: "tool_call", shell: "false" },
         },
       },
-      undefined,
-      [
+      expected: [
         {
           name: "my-rule",
           source: "local",
@@ -514,19 +495,18 @@ describe("loadAsserts", () => {
           default: false,
         },
       ],
-    ],
+    },
 
     // 1.16 ── $schema key is ignored
-    [
-      "$schema key is ignored",
-      {
+    {
+      label: "$schema key is ignored",
+      projectJson: {
         $schema: "https://example.com/schema.json",
         local: {
           "my-rule": { hook: "tool_call", shell: "false" },
         },
       },
-      undefined,
-      [
+      expected: [
         {
           name: "my-rule",
           source: "local",
@@ -537,23 +517,23 @@ describe("loadAsserts", () => {
           default: false,
         },
       ],
-    ],
+    },
 
     // 1.17 ── Project repo overrides global repo
-    [
-      "project repo overrides global repo by source+name",
-      {
+    {
+      label: "project repo overrides global repo by source+name",
+      projectJson: {
         "meffmadd/pi-assert-rules": {
           "block-write": { hook: "tool_call", shell: "exit 1" },
         },
       },
-      {
+      globalJson: {
         "meffmadd/pi-assert-rules": {
           "block-write": { hook: "tool_call", shell: "false" },
           "other-rule": { hook: "tool_call", shell: "true" },
         },
       },
-      [
+      expected: [
         {
           name: "block-write",
           source: "meffmadd/pi-assert-rules",
@@ -573,12 +553,12 @@ describe("loadAsserts", () => {
           default: false,
         },
       ],
-    ],
+    },
 
     // 1.18 ── Same name in different sections → both loaded
-    [
-      "same name, different source → both loaded",
-      {
+    {
+      label: "same name, different source → both loaded",
+      projectJson: {
         local: {
           guard: { hook: "tool_call", shell: "false" },
         },
@@ -586,8 +566,7 @@ describe("loadAsserts", () => {
           guard: { hook: "tool_call", shell: "true" },
         },
       },
-      undefined,
-      [
+      expected: [
         {
           name: "guard",
           source: "local",
@@ -607,19 +586,18 @@ describe("loadAsserts", () => {
           default: false,
         },
       ],
-    ],
+    },
 
     // 1.19 ── Empty local section → skipped
-    [
-      "empty local section → skipped",
-      {
+    {
+      label: "empty local section → skipped",
+      projectJson: {
         local: {},
         "other/repo": {
           rule: { hook: "tool_call", shell: "true" },
         },
       },
-      undefined,
-      [
+      expected: [
         {
           name: "rule",
           source: "other/repo",
@@ -630,19 +608,18 @@ describe("loadAsserts", () => {
           default: false,
         },
       ],
-    ],
+    },
 
     // 1.20 ── Non-object top-level values → skipped
-    [
-      "non-object top-level values → skipped",
-      {
+    {
+      label: "non-object top-level values → skipped",
+      projectJson: {
         local: {
           guard: { hook: "tool_call", shell: "true" },
         },
         bad: "not an object",
       } as Record<string, unknown>,
-      undefined,
-      [
+      expected: [
         {
           name: "guard",
           source: "local",
@@ -653,19 +630,18 @@ describe("loadAsserts", () => {
           default: false,
         },
       ],
-    ],
+    },
 
     // 1.21 ── repos array filters which sections are loaded
-    [
-      "repos array → only declared repo sections load",
-      {
+    {
+      label: "repos array → only declared repo sections load",
+      projectJson: {
         repos: ["repo/a"],
         local: { guard: { hook: "tool_call", shell: "true" } },
         "repo/a": { rule1: { hook: "tool_call", shell: "true" } },
         "repo/b": { rule2: { hook: "tool_call", shell: "true" } },
       },
-      undefined,
-      [
+      expected: [
         {
           name: "guard",
           source: "local",
@@ -685,18 +661,17 @@ describe("loadAsserts", () => {
           default: false,
         },
       ],
-    ],
+    },
 
     // 1.22 ── Missing repos array → all sections load (backward compat)
-    [
-      "missing repos → all object sections loaded",
-      {
+    {
+      label: "missing repos → all object sections loaded",
+      projectJson: {
         local: { guard: { hook: "tool_call", shell: "true" } },
         "repo/a": { rule1: { hook: "tool_call", shell: "true" } },
         "repo/b": { rule2: { hook: "tool_call", shell: "true" } },
       },
-      undefined,
-      [
+      expected: [
         {
           name: "guard",
           source: "local",
@@ -725,17 +700,16 @@ describe("loadAsserts", () => {
           default: false,
         },
       ],
-    ],
+    },
 
     // 1.23 ── repos key itself is skipped (not a section)
-    [
-      "repos key is not treated as a section",
-      {
+    {
+      label: "repos key is not treated as a section",
+      projectJson: {
         repos: ["repo/a"],
         local: { guard: { hook: "tool_call", shell: "true" } },
       },
-      undefined,
-      [
+      expected: [
         {
           name: "guard",
           source: "local",
@@ -746,12 +720,12 @@ describe("loadAsserts", () => {
           default: false,
         },
       ],
-    ],
+    },
   ];
 
   // ── Run cases ────────────────────────────────────────────────────
 
-  for (const [i, [label, projectJson, globalJson, expected]] of cases.entries()) {
+  for (const [i, { label, projectJson, globalJson, expected }] of cases.entries()) {
     it(label, () => {
       clearGlobal();
       if (globalJson !== undefined) makeGlobal(globalJson);

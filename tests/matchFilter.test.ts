@@ -52,12 +52,14 @@ describe("matchFilter", () => {
   // ── No filter (always matches) ──────────────────────────────────
 
   describe("no filter → always true", () => {
-    const cases: [string, Record<string, unknown> | undefined][] = [
-      ["undefined", undefined],
-      ["empty object {}", {}],
+    type Case = { label: string; filter: Record<string, unknown> | undefined };
+
+    const cases: Case[] = [
+      { label: "undefined",        filter: undefined },
+      { label: "empty object {}",  filter: {} },
     ];
 
-    for (const [label, filter] of cases) {
+    for (const { label, filter } of cases) {
       it(label, () => {
         assert.strictEqual(matchFilter(filter, writeEvent), true);
         assert.strictEqual(matchFilter(filter, bashEvent), true);
@@ -70,18 +72,20 @@ describe("matchFilter", () => {
   // ── Positive matches ────────────────────────────────────────────
 
   describe("positive matches (all filter keys present & equal)", () => {
-    const cases: [string, Record<string, unknown>, ToolCallEvent][] = [
-      ["toolName only", { toolName: "write" }, writeEvent],
-      ["input field (path)", { path: "/src/foo.ts" }, writeEvent],
-      ["input field (command)", { command: "ls" }, bashEvent],
-      ["toolName + path", { toolName: "write", path: "/src/foo.ts" }, writeEvent],
-      ["toolName + command", { toolName: "bash", command: "ls" }, bashEvent],
-      ["toolName + timeout", { toolName: "bash", timeout: 10 }, bashEvent],
-      ["command + timeout", { command: "ls", timeout: 10 }, bashEvent],
-      ["toolName + command + timeout", { toolName: "bash", command: "ls", timeout: 10 }, bashEvent],
+    type Case = { label: string; filter: Record<string, unknown>; event: ToolCallEvent };
+
+    const cases: Case[] = [
+      { label: "toolName only",                 filter: { toolName: "write" },                            event: writeEvent },
+      { label: "input field (path)",            filter: { path: "/src/foo.ts" },                           event: writeEvent },
+      { label: "input field (command)",         filter: { command: "ls" },                                event: bashEvent },
+      { label: "toolName + path",               filter: { toolName: "write", path: "/src/foo.ts" },       event: writeEvent },
+      { label: "toolName + command",            filter: { toolName: "bash", command: "ls" },              event: bashEvent },
+      { label: "toolName + timeout",            filter: { toolName: "bash", timeout: 10 },                event: bashEvent },
+      { label: "command + timeout",             filter: { command: "ls", timeout: 10 },                   event: bashEvent },
+      { label: "toolName + command + timeout",  filter: { toolName: "bash", command: "ls", timeout: 10 }, event: bashEvent },
     ];
 
-    for (const [label, filter, event] of cases) {
+    for (const { label, filter, event } of cases) {
       it(label, () => {
         assert.strictEqual(matchFilter(filter, event), true);
       });
@@ -91,17 +95,19 @@ describe("matchFilter", () => {
   // ── Negative matches ────────────────────────────────────────────
 
   describe("negative matches (key present but value differs)", () => {
-    const cases: [string, Record<string, unknown>, ToolCallEvent][] = [
-      ["toolName mismatch (write vs bash)", { toolName: "bash" }, writeEvent],
-      ["toolName mismatch (write vs edit)", { toolName: "edit" }, writeEvent],
-      ["path mismatch", { path: "/src/bar.ts" }, writeEvent],
-      ["command mismatch", { command: "rm" }, bashEvent],
-      ["timeout mismatch", { timeout: 5 }, bashEvent],
-      ["one matches, one mismatches", { toolName: "write", path: "/wrong" }, writeEvent],
-      ["one matches, one mismatches (bash)", { toolName: "bash", command: "rm" }, bashEvent],
+    type Case = { label: string; filter: Record<string, unknown>; event: ToolCallEvent };
+
+    const cases: Case[] = [
+      { label: "toolName mismatch (write vs bash)",       filter: { toolName: "bash" },                   event: writeEvent },
+      { label: "toolName mismatch (write vs edit)",       filter: { toolName: "edit" },                   event: writeEvent },
+      { label: "path mismatch",                           filter: { path: "/src/bar.ts" },                event: writeEvent },
+      { label: "command mismatch",                        filter: { command: "rm" },                      event: bashEvent },
+      { label: "timeout mismatch",                        filter: { timeout: 5 },                         event: bashEvent },
+      { label: "one matches, one mismatches",             filter: { toolName: "write", path: "/wrong" },  event: writeEvent },
+      { label: "one matches, one mismatches (bash)",      filter: { toolName: "bash", command: "rm" },    event: bashEvent },
     ];
 
-    for (const [label, filter, event] of cases) {
+    for (const { label, filter, event } of cases) {
       it(label, () => {
         assert.strictEqual(matchFilter(filter, event), false);
       });
@@ -111,13 +117,15 @@ describe("matchFilter", () => {
   // ── Key not in candidate → false ────────────────────────────────
 
   describe("key not in candidate → false", () => {
-    const cases: [string, Record<string, unknown>, ToolCallEvent][] = [
-      ["extra key 'other'", { other: 42 }, writeEvent],
-      ["extra key in empty input", { path: "/x" }, emptyInput],
-      ["toolName matches but extra key fails", { toolName: "write", extra: 1 }, writeEvent],
+    type Case = { label: string; filter: Record<string, unknown>; event: ToolCallEvent };
+
+    const cases: Case[] = [
+      { label: "extra key 'other'",                     filter: { other: 42 },                        event: writeEvent },
+      { label: "extra key in empty input",              filter: { path: "/x" },                       event: emptyInput },
+      { label: "toolName matches but extra key fails",  filter: { toolName: "write", extra: 1 },      event: writeEvent },
     ];
 
-    for (const [label, filter, event] of cases) {
+    for (const { label, filter, event } of cases) {
       it(label, () => {
         assert.strictEqual(matchFilter(filter, event), false);
       });
@@ -133,17 +141,19 @@ describe("matchFilter", () => {
       input: { present: undefined as any },
     };
 
-    const cases: [string, Record<string, unknown>, ToolCallEvent, boolean][] = [
-      ['string "10" ≠ number 10', { timeout: "10" }, bashEvent, false],
-      ["number 0 = number 0", { count: 0 }, numEvent, true],
-      ["boolean false = boolean false", { flag: false }, numEvent, true],
-      ["null = null", { name: null }, numEvent, true],
-      ["number mismatched against boolean", { count: false as any }, numEvent, false],
-      ["undefined present in candidate → matches", { present: undefined as any }, evtWithUndefined, true],
-      ["undefined absent from candidate → also matches", { absent: undefined as any }, evtWithUndefined, true],
+    type Case = { label: string; filter: Record<string, unknown>; event: ToolCallEvent; expected: boolean };
+
+    const cases: Case[] = [
+      { label: 'string "10" ≠ number 10',                filter: { timeout: "10" },             event: bashEvent,          expected: false },
+      { label: "number 0 = number 0",                    filter: { count: 0 },                  event: numEvent,           expected: true },
+      { label: "boolean false = boolean false",          filter: { flag: false },               event: numEvent,           expected: true },
+      { label: "null = null",                            filter: { name: null },                event: numEvent,           expected: true },
+      { label: "number mismatched against boolean",      filter: { count: false as any },        event: numEvent,           expected: false },
+      { label: "undefined present in candidate → matches",   filter: { present: undefined as any }, event: evtWithUndefined, expected: true },
+      { label: "undefined absent from candidate → also matches", filter: { absent: undefined as any }, event: evtWithUndefined, expected: true },
     ];
 
-    for (const [label, filter, event, expected] of cases) {
+    for (const { label, filter, event, expected } of cases) {
       it(label, () => {
         assert.strictEqual(matchFilter(filter, event), expected);
       });
@@ -160,12 +170,14 @@ describe("matchFilter", () => {
       input: { edits },
     };
 
-    const cases: [string, Record<string, unknown>, ToolCallEvent, boolean][] = [
-      ["same object reference matches", { edits }, evtWithEdits, true],
-      ["different but deep-equal does NOT match (===)", { edits: [{ oldText: "a", newText: "b" }] }, editEvent, false],
+    type Case = { label: string; filter: Record<string, unknown>; event: ToolCallEvent; expected: boolean };
+
+    const cases: Case[] = [
+      { label: "same object reference matches",                         filter: { edits },                                      event: evtWithEdits,  expected: true },
+      { label: "different but deep-equal does NOT match (===)",         filter: { edits: [{ oldText: "a", newText: "b" }] },    event: editEvent,     expected: false },
     ];
 
-    for (const [label, filter, event, expected] of cases) {
+    for (const { label, filter, event, expected } of cases) {
       it(label, () => {
         assert.strictEqual(matchFilter(filter, event), expected);
       });

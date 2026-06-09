@@ -35,16 +35,14 @@ describe("schema self-validation", () => {
 // ═══════════════════════════════════════════════════════════════════
 
 describe("validate", () => {
-  // ── Cases: [label, config, expected: boolean] ────────────────────
-
-  type Case = [label: string, config: unknown, expected: boolean];
+  type Case = { label: string; config: unknown; expected: boolean };
 
   const cases: Case[] = [
     // ── SKILL.md examples ──────────────────────────────────────────
 
-    [
-      "block all write tool calls",
-      {
+    {
+      label: "block all write tool calls",
+      config: {
         local: {
           unmodified: {
             hook: "tool_call",
@@ -53,12 +51,12 @@ describe("validate", () => {
           },
         },
       },
-      true,
-    ],
+      expected: true,
+    },
 
-    [
-      "guard specific file paths",
-      {
+    {
+      label: "guard specific file paths",
+      config: {
         local: {
           "protect-env-files": {
             hook: "tool_call",
@@ -67,12 +65,12 @@ describe("validate", () => {
           },
         },
       },
-      true,
-    ],
+      expected: true,
+    },
 
-    [
-      "no secrets in env",
-      {
+    {
+      label: "no secrets in env",
+      config: {
         local: {
           "no-secrets-in-env": {
             hook: "tool_call",
@@ -81,12 +79,12 @@ describe("validate", () => {
           },
         },
       },
-      true,
-    ],
+      expected: true,
+    },
 
-    [
-      "block rm -rf",
-      {
+    {
+      label: "block rm -rf",
+      config: {
         local: {
           "block-rm-rf": {
             hook: "tool_call",
@@ -95,12 +93,12 @@ describe("validate", () => {
           },
         },
       },
-      true,
-    ],
+      expected: true,
+    },
 
-    [
-      "write only in src",
-      {
+    {
+      label: "write only in src",
+      config: {
         local: {
           "write-only-in-src": {
             hook: "tool_call",
@@ -109,12 +107,12 @@ describe("validate", () => {
           },
         },
       },
-      true,
-    ],
+      expected: true,
+    },
 
-    [
-      "no sensitive reads",
-      {
+    {
+      label: "no sensitive reads",
+      config: {
         local: {
           "no-sensitive-reads": {
             hook: "tool_call",
@@ -123,12 +121,12 @@ describe("validate", () => {
           },
         },
       },
-      true,
-    ],
+      expected: true,
+    },
 
-    [
-      "default-based activation example",
-      {
+    {
+      label: "default-based activation example",
+      config: {
         local: {
           "always-active": {
             hook: "tool_call",
@@ -144,26 +142,26 @@ describe("validate", () => {
           },
         },
       },
-      true,
-    ],
+      expected: true,
+    },
 
     // ── Invalid configs ────────────────────────────────────────────
 
-    [
-      "missing required 'hook'",
-      { local: { bad: { shell: "true" } } },
-      false,
-    ],
+    {
+      label: "missing required 'hook'",
+      config: { local: { bad: { shell: "true" } } },
+      expected: false,
+    },
 
-    [
-      "missing required 'shell'",
-      { local: { bad: { hook: "tool_call" } } },
-      false,
-    ],
+    {
+      label: "missing required 'shell'",
+      config: { local: { bad: { hook: "tool_call" } } },
+      expected: false,
+    },
 
-    [
-      "unknown property at assert level",
-      {
+    {
+      label: "unknown property at assert level",
+      config: {
         local: {
           bad: {
             hook: "tool_call",
@@ -172,125 +170,123 @@ describe("validate", () => {
           },
         },
       },
-      false,
-    ],
+      expected: false,
+    },
 
-    [
-      "hook value not in enum",
-      { local: { bad: { hook: "invalid_hook", shell: "true" } } },
-      false,
-    ],
+    {
+      label: "hook value not in enum",
+      config: { local: { bad: { hook: "invalid_hook", shell: "true" } } },
+      expected: false,
+    },
 
-    [
-      "default is not boolean",
-      {
+    {
+      label: "default is not boolean",
+      config: {
         local: { bad: { hook: "tool_call", shell: "true", default: "yes" } },
       },
-      false,
-    ],
+      expected: false,
+    },
 
-    [
-      "top-level array rejected",
-      [],
-      false,
-    ],
+    {
+      label: "top-level array rejected",
+      config: [],
+      expected: false,
+    },
 
-    [
-      "top-level string rejected",
-      "string",
-      false,
-    ],
+    {
+      label: "top-level string rejected",
+      config: "string",
+      expected: false,
+    },
 
-    [
-      "top-level null rejected",
-      null,
-      false,
-    ],
+    {
+      label: "top-level null rejected",
+      config: null,
+      expected: false,
+    },
 
     // ── Section-based validation ───────────────────────────────────
 
-    [
-      "accepts local section with valid asserts",
-      { local: { guard: { hook: "tool_call", shell: "true" } } },
-      true,
-    ],
+    {
+      label: "accepts local section with valid asserts",
+      config: { local: { guard: { hook: "tool_call", shell: "true" } } },
+      expected: true,
+    },
 
-    [
-      "accepts repo section with valid asserts",
-      {
+    {
+      label: "accepts repo section with valid asserts",
+      config: {
         "meffmadd/pi-assert-rules": {
           "block-write": { hook: "tool_call", shell: "false" },
         },
       },
-      true,
-    ],
+      expected: true,
+    },
 
-    [
-      "accepts mixed local and repo sections",
-      {
+    {
+      label: "accepts mixed local and repo sections",
+      config: {
         local: { custom: { hook: "tool_call", shell: "true" } },
         "some/repo": { installed: { hook: "tool_call", shell: "false" } },
       },
-      true,
-    ],
+      expected: true,
+    },
 
-    [
-      "accepts $schema alongside sections",
-      {
+    {
+      label: "accepts $schema alongside sections",
+      config: {
         $schema: "https://example.com/schema.json",
         local: { guard: { hook: "tool_call", shell: "true" } },
       },
-      true,
-    ],
+      expected: true,
+    },
 
-    [
-      "accepts repos array with valid entries",
-      {
+    {
+      label: "accepts repos array with valid entries",
+      config: {
         repos: ["meffmadd/pi-assert-rules"],
         local: { guard: { hook: "tool_call", shell: "true" } },
         "meffmadd/pi-assert-rules": {
           block: { hook: "tool_call", shell: "false" },
         },
       },
-      true,
-    ],
+      expected: true,
+    },
 
-    [
-      "repos must be an array",
-      { repos: "not-an-array" },
-      false,
-    ],
+    {
+      label: "repos must be an array",
+      config: { repos: "not-an-array" },
+      expected: false,
+    },
 
-    [
-      "repos entries must be owner/repo format",
-      { repos: ["no-slash"] },
-      false,
-    ],
+    {
+      label: "repos entries must be owner/repo format",
+      config: { repos: ["no-slash"] },
+      expected: false,
+    },
 
-    [
-      "repos entries must be unique",
-      { repos: ["a/b", "a/b"] },
-      false,
-    ],
+    {
+      label: "repos entries must be unique",
+      config: { repos: ["a/b", "a/b"] },
+      expected: false,
+    },
 
     // ── Schema evolution ───────────────────────────────────────────
 
-    [
-      "accepts 'tool_call' as hook",
-      { local: { guard: { hook: "tool_call", shell: "true" } } },
-      true,
-    ],
+    {
+      label: "accepts 'tool_call' as hook",
+      config: { local: { guard: { hook: "tool_call", shell: "true" } } },
+      expected: true,
+    },
 
-    [
-      "rejects 'tool_result' as hook (not yet in enum)",
-      { local: { guard: { hook: "tool_result", shell: "true" } } },
-      false,
-    ],
+    {
+      label: "rejects 'tool_result' as hook (not yet in enum)",
+      config: { local: { guard: { hook: "tool_result", shell: "true" } } },
+      expected: false,
+    },
   ];
 
-  // ── Run cases ────────────────────────────────────────────────────
-
-  for (const [label, config, expected] of cases) {
+  for (const { label, config, expected } of cases) {
     it(label, () => {
       assert.strictEqual(validate(config), expected);
     });

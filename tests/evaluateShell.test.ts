@@ -21,16 +21,18 @@ describe("evaluateShell", () => {
   // ── Exit codes ──────────────────────────────────────────────────
 
   describe("exit codes", () => {
-    const cases: [string, string, boolean][] = [
-      ['"true" → pass', "true", true],
-      ['"false" → block', "false", false],
-      ['"exit 0" → pass', "exit 0", true],
-      ['"exit 1" → block', "exit 1", false],
-      ['"exit 42" → block', "exit 42", false],
-      ['"exit 255" → block', "exit 255", false],
+    type Case = { label: string; shell: string; expected: boolean };
+
+    const cases: Case[] = [
+      { label: '"true" → pass',      shell: "true",      expected: true },
+      { label: '"false" → block',    shell: "false",     expected: false },
+      { label: '"exit 0" → pass',    shell: "exit 0",    expected: true },
+      { label: '"exit 1" → block',   shell: "exit 1",    expected: false },
+      { label: '"exit 42" → block',  shell: "exit 42",   expected: false },
+      { label: '"exit 255" → block', shell: "exit 255",  expected: false },
     ];
 
-    for (const [label, shell, expected] of cases) {
+    for (const { label, shell, expected } of cases) {
       it(label, async () => {
         const result = await evaluateShell(shell, env);
         assert.strictEqual(result.passed, expected);
@@ -41,30 +43,32 @@ describe("evaluateShell", () => {
   // ── Shell features (pipes, redirects, chaining) ─────────────────
 
   describe("shell features", () => {
-    const cases: [string, string, boolean][] = [
+    type Case = { label: string; shell: string; expected: boolean };
+
+    const cases: Case[] = [
       // pipes
-      ['pipe → match: echo hello | grep hello', "echo hello | grep hello", true],
-      ['pipe → no match: echo hello | grep missing', "echo hello | grep missing", false],
+      { label: 'pipe → match: echo hello | grep hello',               shell: "echo hello | grep hello",               expected: true },
+      { label: 'pipe → no match: echo hello | grep missing',          shell: "echo hello | grep missing",             expected: false },
 
       // &&
-      ['"&&" both true → pass', "true && true", true],
-      ['"&&" second fails → block', "true && false", false],
-      ['"&&" first fails → block', "false && true", false],
+      { label: '"&&" both true → pass',                               shell: "true && true",                          expected: true },
+      { label: '"&&" second fails → block',                           shell: "true && false",                         expected: false },
+      { label: '"&&" first fails → block',                            shell: "false && true",                         expected: false },
 
       // ||
-      ['"||" fallback → pass', "false || true", true],
-      ['"||" both fail → block', "false || false", false],
-      ['"||" first passes → pass', "true || false", true],
+      { label: '"||" fallback → pass',                                shell: "false || true",                         expected: true },
+      { label: '"||" both fail → block',                              shell: "false || false",                        expected: false },
+      { label: '"||" first passes → pass',                            shell: "true || false",                         expected: true },
 
       // redirect
-      ['redirect to /dev/null → pass', "echo hello > /dev/null", true],
+      { label: 'redirect to /dev/null → pass',                        shell: "echo hello > /dev/null",                expected: true },
 
       // combined
-      ['"true && echo ok | grep ok" → pass', "true && echo ok | grep ok", true],
-      ['"false || echo fallback | grep fallback" → pass', "false || echo fallback | grep fallback", true],
+      { label: '"true && echo ok | grep ok" → pass',                  shell: "true && echo ok | grep ok",             expected: true },
+      { label: '"false || echo fallback | grep fallback" → pass',     shell: "false || echo fallback | grep fallback", expected: true },
     ];
 
-    for (const [label, shell, expected] of cases) {
+    for (const { label, shell, expected } of cases) {
       it(label, async () => {
         const result = await evaluateShell(shell, env);
         assert.strictEqual(result.passed, expected);
@@ -75,15 +79,17 @@ describe("evaluateShell", () => {
   // ── Environment variable access ─────────────────────────────────
 
   describe("environment variable access", () => {
-    const cases: [string, string, Record<string, string>, boolean][] = [
-      ["can read PI_TOOL_NAME", '[ "$PI_TOOL_NAME" = bash ]', { PI_TOOL_NAME: "bash" }, true],
-      ["non-matching PI_TOOL_NAME → block", '[ "$PI_TOOL_NAME" = write ]', { PI_TOOL_NAME: "bash" }, false],
-      ["can grep PI_TOOL_INPUT", 'echo "$PI_TOOL_INPUT" | grep -q ls', { PI_TOOL_INPUT: '{"command":"ls -la"}' }, true],
-      ["grep mismatch on PI_TOOL_INPUT → block", 'echo "$PI_TOOL_INPUT" | grep -q missing', { PI_TOOL_INPUT: '{"command":"ls -la"}' }, false],
-      ["can read PI_CWD", '[ -n "$PI_CWD" ]', { PI_CWD: "/home/user/project" }, true],
+    type Case = { label: string; shell: string; vars: Record<string, string>; expected: boolean };
+
+    const cases: Case[] = [
+      { label: "can read PI_TOOL_NAME",                 shell: '[ "$PI_TOOL_NAME" = bash ]',      vars: { PI_TOOL_NAME: "bash" },                       expected: true },
+      { label: "non-matching PI_TOOL_NAME → block",     shell: '[ "$PI_TOOL_NAME" = write ]',     vars: { PI_TOOL_NAME: "bash" },                       expected: false },
+      { label: "can grep PI_TOOL_INPUT",                shell: 'echo "$PI_TOOL_INPUT" | grep -q ls', vars: { PI_TOOL_INPUT: '{"command":"ls -la"}' },    expected: true },
+      { label: "grep mismatch on PI_TOOL_INPUT → block", shell: 'echo "$PI_TOOL_INPUT" | grep -q missing', vars: { PI_TOOL_INPUT: '{"command":"ls -la"}' }, expected: false },
+      { label: "can read PI_CWD",                       shell: '[ -n "$PI_CWD" ]',                vars: { PI_CWD: "/home/user/project" },               expected: true },
     ];
 
-    for (const [label, shell, vars, expected] of cases) {
+    for (const { label, shell, vars, expected } of cases) {
       it(label, async () => {
         const result = await evaluateShell(shell, vars);
         assert.strictEqual(result.passed, expected);
@@ -119,13 +125,15 @@ describe("evaluateShell", () => {
   // ── Timeout ─────────────────────────────────────────────────────
 
   describe("timeout", () => {
-    const cases: [string, string, number | undefined, boolean][] = [
-      ["command exceeds timeout → block", "sleep 10", 100, false],
-      ["command finishes before timeout → pass", "true", 100, true],
-      ["default timeout (5s) is enough for fast commands", "true", undefined, true],
+    type Case = { label: string; shell: string; timeoutMs: number | undefined; expected: boolean };
+
+    const cases: Case[] = [
+      { label: "command exceeds timeout → block",                       shell: "sleep 10", timeoutMs: 100,        expected: false },
+      { label: "command finishes before timeout → pass",                shell: "true",     timeoutMs: 100,        expected: true },
+      { label: "default timeout (5s) is enough for fast commands",      shell: "true",     timeoutMs: undefined,  expected: true },
     ];
 
-    for (const [label, shell, timeoutMs, expected] of cases) {
+    for (const { label, shell, timeoutMs, expected } of cases) {
       it(label, async () => {
         const result = await evaluateShell(shell, env, undefined, timeoutMs);
         assert.strictEqual(result.passed, expected);
@@ -136,12 +144,14 @@ describe("evaluateShell", () => {
   // ── Error paths ─────────────────────────────────────────────────
 
   describe("error paths", () => {
-    const cases: [string, string, boolean][] = [
-      ["command not found → block", "non_existent_command_xyz_123", false],
-      ["syntax error in shell → block", "(", false],
+    type Case = { label: string; shell: string; expected: boolean };
+
+    const cases: Case[] = [
+      { label: "command not found → block",        shell: "non_existent_command_xyz_123",  expected: false },
+      { label: "syntax error in shell → block",    shell: "(",                             expected: false },
     ];
 
-    for (const [label, shell, expected] of cases) {
+    for (const { label, shell, expected } of cases) {
       it(label, async () => {
         const result = await evaluateShell(shell, env);
         assert.strictEqual(result.passed, expected);
@@ -152,12 +162,14 @@ describe("evaluateShell", () => {
   // ── Env merges on top of process.env ────────────────────────────
 
   describe("env merges on top of process.env", () => {
-    const cases: [string, string, Record<string, string>, boolean][] = [
-      ["inherits PATH from process.env", "which true > /dev/null", {}, true],
-      ["custom env overrides process.env for same key", '[ "$PI_TOOL_NAME" = custom_value ]', { PI_TOOL_NAME: "custom_value" }, true],
+    type Case = { label: string; shell: string; vars: Record<string, string>; expected: boolean };
+
+    const cases: Case[] = [
+      { label: "inherits PATH from process.env",                   shell: "which true > /dev/null",                         vars: {},                                     expected: true },
+      { label: "custom env overrides process.env for same key",    shell: '[ "$PI_TOOL_NAME" = custom_value ]',             vars: { PI_TOOL_NAME: "custom_value" },       expected: true },
     ];
 
-    for (const [label, shell, vars, expected] of cases) {
+    for (const { label, shell, vars, expected } of cases) {
       it(label, async () => {
         const result = await evaluateShell(shell, vars);
         assert.strictEqual(result.passed, expected);

@@ -90,44 +90,44 @@ function mockDirItem(name: string, path: string, type = "file"): unknown {
 // ═══════════════════════════════════════════════════════════════════
 
 describe("fetchRuleFiles", () => {
-  type PassCase = [label: string, items: unknown[], expected: RuleFile[]];
+  type PassCase = { label: string; items: unknown[]; expected: RuleFile[] };
 
   const passCases: PassCase[] = [
-    [
-      "returns only .json files and strips extension",
-      [
+    {
+      label: "returns only .json files and strips extension",
+      items: [
         mockDirItem("defaults.json", "rules/defaults.json"),
         mockDirItem("security.json", "rules/security.json"),
       ],
-      [
+      expected: [
         { name: "defaults", path: "rules/defaults.json", sha: "abc123" },
         { name: "security", path: "rules/security.json", sha: "abc123" },
       ],
-    ],
-    [
-      "filters out non-.json files",
-      [
+    },
+    {
+      label: "filters out non-.json files",
+      items: [
         mockDirItem("defaults.json", "rules/defaults.json"),
         mockDirItem("README.md", "rules/README.md"),
       ],
-      [{ name: "defaults", path: "rules/defaults.json", sha: "abc123" }],
-    ],
-    [
-      "filters out directories",
-      [
+      expected: [{ name: "defaults", path: "rules/defaults.json", sha: "abc123" }],
+    },
+    {
+      label: "filters out directories",
+      items: [
         mockDirItem("defaults.json", "rules/defaults.json"),
         mockDirItem("subdir", "rules/subdir", "dir"),
       ],
-      [{ name: "defaults", path: "rules/defaults.json", sha: "abc123" }],
-    ],
-    [
-      "returns [] for empty rules/ directory",
-      [],
-      [],
-    ],
+      expected: [{ name: "defaults", path: "rules/defaults.json", sha: "abc123" }],
+    },
+    {
+      label: "returns [] for empty rules/ directory",
+      items: [],
+      expected: [],
+    },
   ];
 
-  for (const [label, items, expected] of passCases) {
+  for (const { label, items, expected } of passCases) {
     it(label, async () => {
       mock.method(globalThis, "fetch", () => mockJsonResponse(items));
       assert.deepStrictEqual(
@@ -139,14 +139,14 @@ describe("fetchRuleFiles", () => {
 
   // ── Throws cases ────────────────────────────────────────────────
 
-  type ThrowsCase = [label: string, body: unknown, status: number, errorPattern: RegExp];
+  type ThrowsCase = { label: string; body: unknown; status: number; errorPattern: RegExp };
 
   const throwsCases: ThrowsCase[] = [
-    ["throws on 404", {}, 404, /404/],
-    ["throws on 403", {}, 403, /403/],
+    { label: "throws on 404", body: {}, status: 404, errorPattern: /404/ },
+    { label: "throws on 403", body: {}, status: 403, errorPattern: /403/ },
   ];
 
-  for (const [label, body, status, errorPattern] of throwsCases) {
+  for (const { label, body, status, errorPattern } of throwsCases) {
     it(label, async () => {
       mock.method(globalThis, "fetch", () => mockJsonResponse(body, status));
       await assert.rejects(
@@ -174,12 +174,12 @@ describe("fetchRuleFiles", () => {
 // ═══════════════════════════════════════════════════════════════════
 
 describe("fetchRuleFile", () => {
-  type PassCase = [label: string, content: unknown, expected: RuleEntries];
+  type PassCase = { label: string; content: unknown; expected: RuleEntries };
 
   const passCases: PassCase[] = [
-    [
-      "parses a valid rules file with multiple entries",
-      {
+    {
+      label: "parses a valid rules file with multiple entries",
+      content: {
         "block-write": {
           description: "Blocks all write calls.",
           hook: "tool_call",
@@ -192,7 +192,7 @@ describe("fetchRuleFile", () => {
           shell: "grep rm",
         },
       },
-      {
+      expected: {
         "block-write": {
           description: "Blocks all write calls.",
           hook: "tool_call",
@@ -205,51 +205,51 @@ describe("fetchRuleFile", () => {
           shell: "grep rm",
         },
       },
-    ],
-    [
-      "skips entries missing description",
-      {
+    },
+    {
+      label: "skips entries missing description",
+      content: {
         valid: { description: "Valid entry.", hook: "tool_call", shell: "true" },
         "no-desc": { hook: "tool_call", shell: "false" },
       },
-      {
+      expected: {
         valid: { description: "Valid entry.", hook: "tool_call", shell: "true" },
       },
-    ],
-    [
-      "skips entries missing hook",
-      {
+    },
+    {
+      label: "skips entries missing hook",
+      content: {
         "no-hook": { description: "Missing hook.", shell: "false" },
         valid: { description: "Valid.", hook: "tool_call", shell: "true" },
       },
-      {
+      expected: {
         valid: { description: "Valid.", hook: "tool_call", shell: "true" },
       },
-    ],
-    [
-      "skips entries missing shell",
-      {
+    },
+    {
+      label: "skips entries missing shell",
+      content: {
         "no-shell": { description: "Missing shell.", hook: "tool_call" },
         valid: { description: "Valid.", hook: "tool_call", shell: "true" },
       },
-      {
+      expected: {
         valid: { description: "Valid.", hook: "tool_call", shell: "true" },
       },
-    ],
-    [
-      "skips non-object entries (null, string)",
-      {
+    },
+    {
+      label: "skips non-object entries (null, string)",
+      content: {
         nil: null,
         str: "just a string",
         valid: { description: "Valid.", hook: "tool_call", shell: "true" },
       },
-      {
+      expected: {
         valid: { description: "Valid.", hook: "tool_call", shell: "true" },
       },
-    ],
+    },
   ];
 
-  for (const [label, content, expected] of passCases) {
+  for (const { label, content, expected } of passCases) {
     it(label, async () => {
       mock.method(globalThis, "fetch", () =>
         mockJsonResponse(
@@ -265,40 +265,40 @@ describe("fetchRuleFile", () => {
 
   // ── Throws cases ────────────────────────────────────────────────
 
-  type ThrowsCase = [label: string, response: unknown, errorPattern: RegExp];
+  type ThrowsCase = { label: string; response: unknown; errorPattern: RegExp };
 
   const throwsCases: ThrowsCase[] = [
-    [
-      "throws when response has no content (not a file)",
-      mockJsonResponse({ type: "dir", name: "rules", path: "rules" }),
-      /Not a file/,
-    ],
-    [
-      "throws on non-JSON content",
-      mockJsonResponse({
+    {
+      label: "throws when response has no content (not a file)",
+      response: mockJsonResponse({ type: "dir", name: "rules", path: "rules" }),
+      errorPattern: /Not a file/,
+    },
+    {
+      label: "throws on non-JSON content",
+      response: mockJsonResponse({
         type: "file",
         name: "defaults.json",
         path: "rules/defaults.json",
         content: Buffer.from("not valid json!!!").toString("base64"),
         encoding: "base64",
       }),
-      /JSON/,
-    ],
-    [
-      "throws when content is a JSON array",
-      mockJsonResponse(
+      errorPattern: /JSON/,
+    },
+    {
+      label: "throws when content is a JSON array",
+      response: mockJsonResponse(
         mockFileResponse("defaults.json", "rules/defaults.json", [1, 2, 3]),
       ),
-      /not a JSON object/,
-    ],
-    [
-      "throws on HTTP error",
-      mockJsonResponse({}, 500),
-      /500/,
-    ],
+      errorPattern: /not a JSON object/,
+    },
+    {
+      label: "throws on HTTP error",
+      response: mockJsonResponse({}, 500),
+      errorPattern: /500/,
+    },
   ];
 
-  for (const [label, response, errorPattern] of throwsCases) {
+  for (const { label, response, errorPattern } of throwsCases) {
     it(label, async () => {
       mock.method(globalThis, "fetch", () => response as Response);
       await assert.rejects(
@@ -314,158 +314,158 @@ describe("fetchRuleFile", () => {
 // ═══════════════════════════════════════════════════════════════════
 
 describe("installRule", () => {
-  type Case = [
-    label: string,
-    initialJson: object | undefined,
-    repo: string,
-    name: string,
-    entry: RuleEntry,
-    expectedParsed: object,
-  ];
+  type Case = {
+    label: string;
+    initialJson: object | undefined;
+    repo: string;
+    name: string;
+    entry: RuleEntry;
+    expected: object;
+  };
 
   const cases: Case[] = [
     // ── Fresh installs ────────────────────────────────────────────
-    [
-      "writes to fresh .pi/asserts.json under correct repo key",
-      undefined,
-      "meffmadd/pi-assert-rules",
-      "my-rule",
-      { description: "A test rule.", hook: "tool_call", shell: "false" },
-      {
+    {
+      label: "writes to fresh .pi/asserts.json under correct repo key",
+      initialJson: undefined,
+      repo: "meffmadd/pi-assert-rules",
+      name: "my-rule",
+      entry: { description: "A test rule.", hook: "tool_call", shell: "false" },
+      expected: {
         "meffmadd/pi-assert-rules": { "my-rule": { hook: "tool_call", shell: "false" } },
         repos: ["meffmadd/pi-assert-rules"],
       },
-    ],
-    [
-      "strips description from written output",
-      undefined,
-      "some/repo",
-      "my-rule",
-      { description: "This should NOT appear.", hook: "tool_call", shell: "false" },
-      {
+    },
+    {
+      label: "strips description from written output",
+      initialJson: undefined,
+      repo: "some/repo",
+      name: "my-rule",
+      entry: { description: "This should NOT appear.", hook: "tool_call", shell: "false" },
+      expected: {
         "some/repo": { "my-rule": { hook: "tool_call", shell: "false" } },
         repos: ["some/repo"],
       },
-    ],
-    [
-      "writes filter when present",
-      undefined,
-      "some/repo",
-      "my-rule",
-      { description: "Test.", hook: "tool_call", filter: { toolName: "write" }, shell: "false" },
-      {
+    },
+    {
+      label: "writes filter when present",
+      initialJson: undefined,
+      repo: "some/repo",
+      name: "my-rule",
+      entry: { description: "Test.", hook: "tool_call", filter: { toolName: "write" }, shell: "false" },
+      expected: {
         "some/repo": { "my-rule": { hook: "tool_call", filter: { toolName: "write" }, shell: "false" } },
         repos: ["some/repo"],
       },
-    ],
-    [
-      "writes when when present",
-      undefined,
-      "some/repo",
-      "my-rule",
-      { description: "Test.", hook: "tool_call", when: "git diff --quiet", shell: "false" },
-      {
+    },
+    {
+      label: "writes when when present",
+      initialJson: undefined,
+      repo: "some/repo",
+      name: "my-rule",
+      entry: { description: "Test.", hook: "tool_call", when: "git diff --quiet", shell: "false" },
+      expected: {
         "some/repo": { "my-rule": { hook: "tool_call", when: "git diff --quiet", shell: "false" } },
         repos: ["some/repo"],
       },
-    ],
-    [
-      "writes default when present",
-      undefined,
-      "some/repo",
-      "my-rule",
-      { description: "Test.", hook: "tool_call", shell: "false", default: true },
-      {
+    },
+    {
+      label: "writes default when present",
+      initialJson: undefined,
+      repo: "some/repo",
+      name: "my-rule",
+      entry: { description: "Test.", hook: "tool_call", shell: "false", default: true },
+      expected: {
         "some/repo": { "my-rule": { hook: "tool_call", shell: "false", default: true } },
         repos: ["some/repo"],
       },
-    ],
-    [
-      "omits optional fields when absent",
-      undefined,
-      "some/repo",
-      "my-rule",
-      { description: "Test.", hook: "tool_call", shell: "false" },
-      {
+    },
+    {
+      label: "omits optional fields when absent",
+      initialJson: undefined,
+      repo: "some/repo",
+      name: "my-rule",
+      entry: { description: "Test.", hook: "tool_call", shell: "false" },
+      expected: {
         "some/repo": { "my-rule": { hook: "tool_call", shell: "false" } },
         repos: ["some/repo"],
       },
-    ],
-    [
-      "writes all optional fields when all present",
-      undefined,
-      "some/repo",
-      "my-rule",
-      { description: "Test.", hook: "tool_call", filter: { toolName: "bash" }, when: "true", shell: "false", default: true },
-      {
+    },
+    {
+      label: "writes all optional fields when all present",
+      initialJson: undefined,
+      repo: "some/repo",
+      name: "my-rule",
+      entry: { description: "Test.", hook: "tool_call", filter: { toolName: "bash" }, when: "true", shell: "false", default: true },
+      expected: {
         "some/repo": {
           "my-rule": { hook: "tool_call", filter: { toolName: "bash" }, when: "true", shell: "false", default: true },
         },
         repos: ["some/repo"],
       },
-    ],
+    },
 
     // ── Merging / overwriting existing files ──────────────────────
-    [
-      "merges into existing file (preserves other sections)",
-      { local: { existing: { hook: "tool_call", shell: "true" } } },
-      "meffmadd/pi-assert-rules",
-      "new-rule",
-      { description: "New rule.", hook: "tool_call", filter: { toolName: "bash" }, shell: "false" },
-      {
+    {
+      label: "merges into existing file (preserves other sections)",
+      initialJson: { local: { existing: { hook: "tool_call", shell: "true" } } },
+      repo: "meffmadd/pi-assert-rules",
+      name: "new-rule",
+      entry: { description: "New rule.", hook: "tool_call", filter: { toolName: "bash" }, shell: "false" },
+      expected: {
         local: { existing: { hook: "tool_call", shell: "true" } },
         "meffmadd/pi-assert-rules": { "new-rule": { hook: "tool_call", filter: { toolName: "bash" }, shell: "false" } },
         repos: ["meffmadd/pi-assert-rules"],
       },
-    ],
-    [
-      "overwrites existing key with same name in same repo",
-      { "meffmadd/pi-assert-rules": { "my-rule": { hook: "tool_call", shell: "old" } } },
-      "meffmadd/pi-assert-rules",
-      "my-rule",
-      { description: "Updated.", hook: "tool_call", shell: "new" },
-      {
+    },
+    {
+      label: "overwrites existing key with same name in same repo",
+      initialJson: { "meffmadd/pi-assert-rules": { "my-rule": { hook: "tool_call", shell: "old" } } },
+      repo: "meffmadd/pi-assert-rules",
+      name: "my-rule",
+      entry: { description: "Updated.", hook: "tool_call", shell: "new" },
+      expected: {
         "meffmadd/pi-assert-rules": { "my-rule": { hook: "tool_call", shell: "new" } },
         repos: ["meffmadd/pi-assert-rules"],
       },
-    ],
-    [
-      "handles broken existing JSON (starts fresh)",
-      undefined, // file content is written manually below
-      "some/repo",
-      "my-rule",
-      { description: "Test.", hook: "tool_call", shell: "true" },
-      {
+    },
+    {
+      label: "handles broken existing JSON (starts fresh)",
+      initialJson: undefined, // file content is written manually below
+      repo: "some/repo",
+      name: "my-rule",
+      entry: { description: "Test.", hook: "tool_call", shell: "true" },
+      expected: {
         "some/repo": { "my-rule": { hook: "tool_call", shell: "true" } },
         repos: ["some/repo"],
       },
-    ],
-    [
-      "installs into a second repo without clobbering the first",
-      undefined, // first install is done separately, second via installRule
-      "repo/b",
-      "rule2",
-      { description: "Second.", hook: "tool_call", shell: "false" },
-      {
+    },
+    {
+      label: "installs into a second repo without clobbering the first",
+      initialJson: undefined, // first install is done separately, second via installRule
+      repo: "repo/b",
+      name: "rule2",
+      entry: { description: "Second.", hook: "tool_call", shell: "false" },
+      expected: {
         "repo/a": { rule1: { hook: "tool_call", shell: "true" } },
         "repo/b": { rule2: { hook: "tool_call", shell: "false" } },
         repos: ["repo/a", "repo/b"],
       },
-    ],
-    [
-      "repos not duplicated when installing to already-declared repo",
-      { repos: ["meffmadd/pi-assert-rules"] },
-      "meffmadd/pi-assert-rules",
-      "my-rule",
-      { description: "A rule.", hook: "tool_call", shell: "false" },
-      {
+    },
+    {
+      label: "repos not duplicated when installing to already-declared repo",
+      initialJson: { repos: ["meffmadd/pi-assert-rules"] },
+      repo: "meffmadd/pi-assert-rules",
+      name: "my-rule",
+      entry: { description: "A rule.", hook: "tool_call", shell: "false" },
+      expected: {
         repos: ["meffmadd/pi-assert-rules"],
         "meffmadd/pi-assert-rules": { "my-rule": { hook: "tool_call", shell: "false" } },
       },
-    ],
+    },
   ];
 
-  for (const [label, initialJson, repo, name, entry, expected] of cases) {
+  for (const { label, initialJson, repo, name, entry, expected } of cases) {
     it(label, () => {
       const cwd = join(tmpRoot, label.replace(/[^a-z0-9-]/gi, "-"));
 
@@ -514,72 +514,72 @@ describe("installRule", () => {
 // ═══════════════════════════════════════════════════════════════════
 
 describe("removeRule", () => {
-  type Case = [
-    label: string,
-    initialJson: object | undefined,
-    repo: string,
-    name: string,
-    expectedResult: boolean,
-    expectedParsed?: object,
-  ];
+  type Case = {
+    label: string;
+    initialJson: object | undefined;
+    repo: string;
+    name: string;
+    expectedResult: boolean;
+    expectedParsed?: object;
+  };
 
   const cases: Case[] = [
-    [
-      "removes an existing assert from a repo section",
-      {
+    {
+      label: "removes an existing assert from a repo section",
+      initialJson: {
         local: { "keep-me": { hook: "tool_call", shell: "true" } },
         "some/repo": { "drop-me": { hook: "tool_call", shell: "false" } },
       },
-      "some/repo",
-      "drop-me",
-      true,
-      { local: { "keep-me": { hook: "tool_call", shell: "true" } } },
-    ],
-    [
-      "prunes empty repo section",
-      {
+      repo: "some/repo",
+      name: "drop-me",
+      expectedResult: true,
+      expectedParsed: { local: { "keep-me": { hook: "tool_call", shell: "true" } } },
+    },
+    {
+      label: "prunes empty repo section",
+      initialJson: {
         "some/repo": { "only-me": { hook: "tool_call", shell: "true" } },
       },
-      "some/repo",
-      "only-me",
-      true,
-      {},
-    ],
-    [
-      "returns false when assert not found",
-      {
+      repo: "some/repo",
+      name: "only-me",
+      expectedResult: true,
+      expectedParsed: {},
+    },
+    {
+      label: "returns false when assert not found",
+      initialJson: {
         "some/repo": { "my-rule": { hook: "tool_call", shell: "true" } },
       },
-      "some/repo",
-      "nonexistent",
-      false,
-    ],
-    [
-      "returns false when repo section missing",
-      {
+      repo: "some/repo",
+      name: "nonexistent",
+      expectedResult: false,
+    },
+    {
+      label: "returns false when repo section missing",
+      initialJson: {
         local: { "my-rule": { hook: "tool_call", shell: "true" } },
       },
-      "other/repo",
-      "anything",
-      false,
-    ],
-    [
-      "returns false when file missing",
-      undefined,
-      "any/repo",
-      "anything",
-      false,
-    ],
-    [
-      "returns false on broken JSON",
-      undefined, // handled manually
-      "any/repo",
-      "anything",
-      false,
-    ],
+      repo: "other/repo",
+      name: "anything",
+      expectedResult: false,
+    },
+    {
+      label: "returns false when file missing",
+      initialJson: undefined,
+      repo: "any/repo",
+      name: "anything",
+      expectedResult: false,
+    },
+    {
+      label: "returns false on broken JSON",
+      initialJson: undefined, // handled manually
+      repo: "any/repo",
+      name: "anything",
+      expectedResult: false,
+    },
   ];
 
-  for (const [label, initialJson, repo, name, expectedResult, expectedParsed] of cases) {
+  for (const { label, initialJson, repo, name, expectedResult, expectedParsed } of cases) {
     it(label, () => {
       const cwd = join(tmpRoot, `remove-${label.replace(/[^a-z0-9-]/gi, "-")}`);
 
@@ -610,39 +610,39 @@ describe("removeRule", () => {
 // ═══════════════════════════════════════════════════════════════════
 
 describe("getInstalledRepos", () => {
-  type Case = [
-    label: string,
-    initialJson: object | undefined,
-    expected: string[],
-  ];
+  type Case = {
+    label: string;
+    initialJson: object | undefined;
+    expected: string[];
+  };
 
   const cases: Case[] = [
-    [
-      "returns repo keys (excluding local and $schema)",
-      {
+    {
+      label: "returns repo keys (excluding local and $schema)",
+      initialJson: {
         $schema: "https://example.com/schema.json",
         repos: ["meffmadd/pi-assert-rules", "other/repo"],
         local: { rule: { hook: "tool_call", shell: "true" } },
         "meffmadd/pi-assert-rules": { block: { hook: "tool_call", shell: "false" } },
         "other/repo": { another: { hook: "tool_call", shell: "true" } },
       },
-      ["meffmadd/pi-assert-rules", "other/repo"],
-    ],
-    [
-      "returns [] when no repo sections exist",
-      {
+      expected: ["meffmadd/pi-assert-rules", "other/repo"],
+    },
+    {
+      label: "returns [] when no repo sections exist",
+      initialJson: {
         local: { rule: { hook: "tool_call", shell: "true" } },
       },
-      [],
-    ],
-    [
-      "returns [] when file missing",
-      undefined,
-      [],
-    ],
+      expected: [],
+    },
+    {
+      label: "returns [] when file missing",
+      initialJson: undefined,
+      expected: [],
+    },
   ];
 
-  for (const [label, initialJson, expected] of cases) {
+  for (const { label, initialJson, expected } of cases) {
     it(label, () => {
       const cwd = join(tmpRoot, `repos-${label.replace(/[^a-z0-9-]/gi, "-")}`);
 
@@ -664,41 +664,41 @@ describe("getInstalledRepos", () => {
 // ═══════════════════════════════════════════════════════════════════
 
 describe("addRepo", () => {
-  type Case = [
-    label: string,
-    initialJson: object | undefined,
-    repo: string,
-    expectedRepos: string[],
-  ];
+  type Case = {
+    label: string;
+    initialJson: object | undefined;
+    repo: string;
+    expectedRepos: string[];
+  };
 
   const cases: Case[] = [
-    [
-      "adds a repo to the repos array",
-      undefined,
-      "meffmadd/pi-assert-rules",
-      ["meffmadd/pi-assert-rules"],
-    ],
-    [
-      "appends to existing repos",
-      { repos: ["repo/a"], local: { rule: { hook: "tool_call", shell: "true" } } },
-      "repo/b",
-      ["repo/a", "repo/b"],
-    ],
-    [
-      "no-op when repo already present",
-      { repos: ["repo/a"], "repo/a": { rule: { hook: "tool_call", shell: "true" } } },
-      "repo/a",
-      ["repo/a"],
-    ],
-    [
-      "preserves local section when adding repo",
-      { local: { rule: { hook: "tool_call", shell: "true" } } },
-      "some/repo",
-      ["some/repo"],
-    ],
+    {
+      label: "adds a repo to the repos array",
+      initialJson: undefined,
+      repo: "meffmadd/pi-assert-rules",
+      expectedRepos: ["meffmadd/pi-assert-rules"],
+    },
+    {
+      label: "appends to existing repos",
+      initialJson: { repos: ["repo/a"], local: { rule: { hook: "tool_call", shell: "true" } } },
+      repo: "repo/b",
+      expectedRepos: ["repo/a", "repo/b"],
+    },
+    {
+      label: "no-op when repo already present",
+      initialJson: { repos: ["repo/a"], "repo/a": { rule: { hook: "tool_call", shell: "true" } } },
+      repo: "repo/a",
+      expectedRepos: ["repo/a"],
+    },
+    {
+      label: "preserves local section when adding repo",
+      initialJson: { local: { rule: { hook: "tool_call", shell: "true" } } },
+      repo: "some/repo",
+      expectedRepos: ["some/repo"],
+    },
   ];
 
-  for (const [label, initialJson, repo, expectedRepos] of cases) {
+  for (const { label, initialJson, repo, expectedRepos } of cases) {
     it(label, () => {
       const cwd = join(tmpRoot, `add-${label.replace(/[^a-z0-9-]/gi, "-")}`);
 

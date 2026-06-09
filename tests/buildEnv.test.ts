@@ -21,40 +21,22 @@ describe("buildEnv", () => {
   // ── Various tool types ─────────────────────────────────────────
 
   describe("various tool types", () => {
-    const cases: [string, string, Record<string, unknown>, string][] = [
-      [
-        "write",
-        "write",
-        { path: "/f.ts", content: "hello" },
-        '{"path":"/f.ts","content":"hello"}',
-      ],
-      [
-        "read",
-        "read",
-        { path: "/f.ts" },
-        '{"path":"/f.ts"}',
-      ],
-      [
-        "edit",
-        "edit",
-        { path: "/f.ts", edits: [{ oldText: "a", newText: "b" }] },
-        '{"path":"/f.ts","edits":[{"oldText":"a","newText":"b"}]}',
-      ],
-      [
-        "bash w/ timeout",
-        "bash",
-        { command: "ls", timeout: 30 },
-        '{"command":"ls","timeout":30}',
-      ],
-      [
-        "bash w/o timeout",
-        "bash",
-        { command: "git status" },
-        '{"command":"git status"}',
-      ],
+    type Case = {
+      label: string;
+      toolName: string;
+      input: Record<string, unknown>;
+      expectedInput: string;
+    };
+
+    const cases: Case[] = [
+      { label: "write",              toolName: "write", input: { path: "/f.ts", content: "hello" }, expectedInput: '{"path":"/f.ts","content":"hello"}' },
+      { label: "read",               toolName: "read",  input: { path: "/f.ts" },                     expectedInput: '{"path":"/f.ts"}' },
+      { label: "edit",               toolName: "edit",  input: { path: "/f.ts", edits: [{ oldText: "a", newText: "b" }] }, expectedInput: '{"path":"/f.ts","edits":[{"oldText":"a","newText":"b"}]}' },
+      { label: "bash w/ timeout",    toolName: "bash",  input: { command: "ls", timeout: 30 },       expectedInput: '{"command":"ls","timeout":30}' },
+      { label: "bash w/o timeout",   toolName: "bash",  input: { command: "git status" },            expectedInput: '{"command":"git status"}' },
     ];
 
-    for (const [label, toolName, input, expectedInput] of cases) {
+    for (const { label, toolName, input, expectedInput } of cases) {
       it(label, () => {
         const event: ToolCallEvent = {
           toolName,
@@ -72,21 +54,27 @@ describe("buildEnv", () => {
     }
   });
 
-  // 3.3 ── Edge-case input ─────────────────────────────────────────
+  // ── Edge-case input ─────────────────────────────────────────────
 
   describe("edge-case input", () => {
-    const cases: [string, Record<string, unknown>, string][] = [
-      ["empty input", {}, "{}"],
-      ["empty string value", { path: "" }, '{"path":""}'],
-      ["null value", { path: null as any }, '{"path":null}'],
-      ["boolean value", { force: true }, '{"force":true}'],
-      ["number value", { count: 0 }, '{"count":0}'],
-      ["array value", { items: [1, 2, 3] }, '{"items":[1,2,3]}'],
-      ["newline escapes (no literal \n in JSON)", { command: "echo 'hello\nworld'" }, '{"command":"echo \'hello\\nworld\'"}'],
-      ["special characters → escaped", { command: 'echo "double" and \'single\' and \\ backslash' }, '{"command":"echo \\"double\\" and \'single\' and \\\\ backslash"}'],
+    type Case = {
+      label: string;
+      input: Record<string, unknown>;
+      expectedInput: string;
+    };
+
+    const cases: Case[] = [
+      { label: "empty input",                  input: {},                                        expectedInput: "{}" },
+      { label: "empty string value",           input: { path: "" },                             expectedInput: '{"path":""}' },
+      { label: "null value",                   input: { path: null as any },                    expectedInput: '{"path":null}' },
+      { label: "boolean value",                input: { force: true },                          expectedInput: '{"force":true}' },
+      { label: "number value",                 input: { count: 0 },                             expectedInput: '{"count":0}' },
+      { label: "array value",                  input: { items: [1, 2, 3] },                     expectedInput: '{"items":[1,2,3]}' },
+      { label: "newline escapes (no literal \n in JSON)", input: { command: "echo 'hello\nworld'" }, expectedInput: '{"command":"echo \'hello\\nworld\'"}' },
+      { label: "special characters → escaped", input: { command: 'echo "double" and \'single\' and \\ backslash' }, expectedInput: '{"command":"echo \\"double\\" and \'single\' and \\\\ backslash"}' },
     ];
 
-    for (const [label, input, expectedInput] of cases) {
+    for (const { label, input, expectedInput } of cases) {
       it(label, () => {
         const event: ToolCallEvent = {
           toolName: "test",
@@ -100,17 +88,19 @@ describe("buildEnv", () => {
     }
   });
 
-  // 3.4 ── Different CWD values ────────────────────────────────────
+  // ── Different CWD values ────────────────────────────────────────
 
   it("cwd flows from context correctly", () => {
-    const cases: [string, string][] = [
-      ["/home/user/project", "/home/user/project"],
-      ["/tmp", "/tmp"],
-      ["/very/deep/nested/path", "/very/deep/nested/path"],
-      ["relative/path", "relative/path"],
+    type Case = { cwd: string; expected: string };
+
+    const cases: Case[] = [
+      { cwd: "/home/user/project",       expected: "/home/user/project" },
+      { cwd: "/tmp",                     expected: "/tmp" },
+      { cwd: "/very/deep/nested/path",   expected: "/very/deep/nested/path" },
+      { cwd: "relative/path",            expected: "relative/path" },
     ];
 
-    for (const [cwdValue, expected] of cases) {
+    for (const { cwd: cwdValue, expected } of cases) {
       const c: ExtensionContext = { cwd: cwdValue };
       const event: ToolCallEvent = {
         toolName: "test",
