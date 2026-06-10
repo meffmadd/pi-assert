@@ -423,6 +423,96 @@ describe("loadAsserts", () => {
       ],
     },
 
+    // 1.24 ── agent_end hook loaded correctly
+    {
+      label: "agent_end hook → loaded with correct hook value",
+      projectJson: {
+        local: {
+          "check-git-clean": {
+            hook: "agent_end",
+            shell: "git diff --quiet",
+            default: true,
+          },
+        },
+      },
+      expected: [
+        {
+          name: "check-git-clean",
+          source: "local",
+          hook: "agent_end",
+          filter: undefined,
+          when: undefined,
+          shell: "git diff --quiet",
+          default: true,
+        },
+      ],
+    },
+
+    {
+      label: "agent_end with filter, when, and default",
+      projectJson: {
+        local: {
+          "check-tests": {
+            hook: "agent_end",
+            filter: { event: "agent_end" },
+            when: "test -d tests",
+            shell: "test -n \"$(ls tests/*.test.ts 2>/dev/null)\"",
+            default: false,
+          },
+        },
+      },
+      expected: [
+        {
+          name: "check-tests",
+          source: "local",
+          hook: "agent_end",
+          filter: { event: "agent_end" },
+          when: "test -d tests",
+          shell: "test -n \"$(ls tests/*.test.ts 2>/dev/null)\"",
+          default: false,
+        },
+      ],
+    },
+
+    // 1.25 ── Mixed hooks in same file
+    {
+      label: "mixed hooks in same file → all loaded",
+      projectJson: {
+        local: {
+          "tool-guard": {
+            hook: "tool_call",
+            filter: { toolName: "write" },
+            shell: "false",
+          },
+          "end-guard": {
+            hook: "agent_end",
+            shell: "git diff --quiet",
+            default: true,
+          },
+        },
+      },
+      expected: [
+        {
+          name: "tool-guard",
+          source: "local",
+          hook: "tool_call",
+          filter: { toolName: "write" },
+          when: undefined,
+          shell: "false",
+          default: false,
+        },
+        {
+          name: "end-guard",
+          source: "local",
+          hook: "agent_end",
+          filter: undefined,
+          when: undefined,
+          shell: "git diff --quiet",
+          default: true,
+        },
+      ],
+    },
+
     // 1.14 ── Multiple valid asserts in one file
     {
       label: "multiple valid asserts → all loaded",

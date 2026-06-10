@@ -15,51 +15,19 @@ import { tmpdir } from "node:os";
 
 import {
   loadAsserts,
-  matchFilter,
-  buildEnv,
-  evaluateShell,
   type Assert,
   type ToolCallEvent,
+  type AgentEndEvent,
   type ExtensionContext,
 } from "../pi-assert/engine.js";
 
-// ── Simulated extension orchestration ──────────────────────────────
+import {
+  executeToolCallAsserts,
+  executeAgentEndAsserts,
+} from "../pi-assert/executor.js";
 
-interface BlockResult {
-  block: true;
-  reason: string;
-}
-
-/**
- * Simulates what index.ts does: iterate asserts, match filter, run shell,
- * return first block or undefined.
- */
-async function runAsserts(
-  asserts: Assert[],
-  event: ToolCallEvent,
-  ctx: ExtensionContext,
-): Promise<BlockResult | undefined> {
-  for (const a of asserts) {
-    if (a.hook !== "tool_call") continue;
-    if (!matchFilter(a.filter, event)) continue;
-
-    const env = buildEnv(event, ctx);
-
-    // Precondition: if `when` is present and fails, skip this assert
-    if (a.when) {
-      const precondition = await evaluateShell(a.when, env, ctx.signal);
-      if (!precondition.passed) continue;
-    }
-
-    const result = await evaluateShell(a.shell, env, ctx.signal);
-
-    if (!result.passed) {
-      const reason = `pi-assert: assertion "${a.name}" rejected ${event.toolName} — \`${a.shell}\``;
-      return { block: true, reason };
-    }
-  }
-  return undefined;
-}
+// ── Convenience alias ──────────────────────────────────────────────
+const runAsserts = executeToolCallAsserts;
 
 // ── Temp dir helpers ───────────────────────────────────────────────
 
@@ -581,5 +549,337 @@ describe("e2e: orchestration", () => {
     const result = await runAsserts(asserts, event, ctx);
     assert.ok(result);
     assert.ok(result!.reason.includes("slow-check"));
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// End-to-end: agent_end orchestration
+// ═══════════════════════════════════════════════════════════════════
+
+describe("e2e: agent_end orchestration", () => {
+  const agentEndEvent: AgentEndEvent = {};
+
+  // 6.1 ── No asserts → no failures ──────────────────────────────
+
+  it("no asserts loaded → no failures", async () => {
+    const cwd = setupConfig("e2e-ae-empty", {});
+    const asserts = loadAsserts(cwd);
+    assert.strictEqual(asserts.length, 0);
+
+    const failures = await executeAgentEndAsserts(asserts, agentEndEvent, defaultCtx);
+    assert.deepStrictEqual(failures, []);
+  });
+
+  // 6.2 ── Single assert with matching filter → failure recorded ───
+
+  it("single agent_end assert with matching filter → failure recorded", async () => {
+    const cwd = setupConfig("e2e-ae-single-fail", {
+      "check-clean": {
+        hook: "agent_end",
+        filter: { event: "agent_end" },
+        shell: "false",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+    assert.strictEqual(asserts.length, 1);
+
+    const failures = await executeAgentEndAsserts(asserts, agentEndEvent, defaultCtx);
+    assert.strictEqual(failures.length, 1);
+    assert.ok(failures[0].includes("check-clean"));
+    assert.ok(failures[0].includes("false"));
+  });
+
+  // 6.3 ── No fail-fast: all matching failures are collected ───────
+
+  it("no fail-fast: all matching failures collected", async () => {
+    const cwd = setupConfig("e2e-ae-no-failfast", {
+      "check-a": {
+        hook: "agent_end",
+        filter: { event: "agent_end" },
+        shell: "false",
+      },
+      "check-b": {
+        hook: "agent_end",
+        filter: { event: "agent_end" },
+        shell: "exit 1",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+    assert.strictEqual(asserts.length, 2);
+
+    const failures = await executeAgentEndAsserts(asserts, agentEndEvent, defaultCtx);
+    assert.strictEqual(failures.length, 2);
+    assert.ok(failures[0].includes("check-a"));
+    assert.ok(failures[1].includes("check-b"));
+  });
+
+  // 6.4 ── No filter → fires on every agent_end ──────────────────
+
+  it("no filter → fires on every agent_end", async () => {
+    const cwd = setupConfig("e2e-ae-no-filter", {
+      "always-run": {
+        hook: "agent_end",
+        shell: "false",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+
+    const failures = await executeAgentEndAsserts(asserts, agentEndEvent, defaultCtx);
+    assert.strictEqual(failures.length, 1);
+    assert.ok(failures[0].includes("always-run"));
+  });
+
+  // 6.5 ── Shell passes (exit 0) → no failure ─────────────────────
+
+  it("shell passes (exit 0) → no failure", async () => {
+    const cwd = setupConfig("e2e-ae-pass", {
+      "always-ok": {
+        hook: "agent_end",
+        shell: "true",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+
+    const failures = await executeAgentEndAsserts(asserts, agentEndEvent, defaultCtx);
+    assert.deepStrictEqual(failures, []);
+  });
+
+  // 6.6 ── Asserts with non-agent_end hook are skipped ─────────────
+
+  it("asserts with non-agent_end hook are skipped", async () => {
+    const asserts: Assert[] = [
+      { name: "tool-check", source: "local", hook: "tool_call", filter: {}, shell: "false", default: false },
+      { name: "end-check", source: "local", hook: "agent_end", filter: {}, shell: "true", default: false },
+    ];
+
+    const failures = await executeAgentEndAsserts(asserts, agentEndEvent, defaultCtx);
+    assert.deepStrictEqual(failures, []);
+  });
+
+  // 6.7 ── default-based activation ───────────────────────────────
+
+  it("only asserts with default:true are active for new sessions", async () => {
+    const cwd = setupConfig("e2e-ae-defaults", {
+      "always-active": {
+        hook: "agent_end",
+        shell: "false",
+        default: true,
+      },
+      "opt-in": {
+        hook: "agent_end",
+        shell: "false",
+        default: false,
+      },
+      "also-opt-in": {
+        hook: "agent_end",
+        shell: "false",
+      },
+    });
+
+    const allAsserts = loadAsserts(cwd);
+    assert.strictEqual(allAsserts.length, 3);
+
+    // Simulate restoreFromBranch: activeAsserts = default:true only
+    const activeAsserts = new Set(
+      allAsserts.filter((a) => a.default).map((a) => a.name),
+    );
+    assert.strictEqual(activeAsserts.size, 1);
+    assert.ok(activeAsserts.has("always-active"));
+
+    const activeList = allAsserts.filter((a) => activeAsserts.has(a.name));
+    assert.strictEqual(activeList.length, 1);
+
+    const failures = await executeAgentEndAsserts(activeList, agentEndEvent, defaultCtx);
+    assert.strictEqual(failures.length, 1);
+    assert.ok(failures[0].includes("always-active"));
+  });
+
+  // 6.8 ── when precondition: passes → main shell runs ─────────────
+
+  it("when passes → main shell runs and can fail", async () => {
+    const cwd = setupConfig("e2e-ae-when-pass", {
+      "conditional-guard": {
+        hook: "agent_end",
+        when: "true",
+        shell: "false",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+
+    const failures = await executeAgentEndAsserts(asserts, agentEndEvent, defaultCtx);
+    assert.strictEqual(failures.length, 1);
+    assert.ok(failures[0].includes("conditional-guard"));
+  });
+
+  it("when passes → main shell passes → no failure", async () => {
+    const cwd = setupConfig("e2e-ae-when-both-pass", {
+      "always-ok": {
+        hook: "agent_end",
+        when: "true",
+        shell: "true",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+
+    const failures = await executeAgentEndAsserts(asserts, agentEndEvent, defaultCtx);
+    assert.deepStrictEqual(failures, []);
+  });
+
+  // 6.9 ── when precondition: fails → assert skipped ────────────────
+
+  it("when fails → assert skipped entirely (no failure)", async () => {
+    const cwd = setupConfig("e2e-ae-when-fail", {
+      "only-in-git": {
+        hook: "agent_end",
+        when: "false",
+        shell: "false",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+
+    const failures = await executeAgentEndAsserts(asserts, agentEndEvent, defaultCtx);
+    assert.deepStrictEqual(failures, []);
+  });
+
+  it("when fails → second assert still runs (no fail-fast on when)", async () => {
+    const cwd = setupConfig("e2e-ae-when-fail-continue", {
+      "skip-me": {
+        hook: "agent_end",
+        when: "false",
+        shell: "false",
+      },
+      "always-fail": {
+        hook: "agent_end",
+        shell: "false",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+
+    const failures = await executeAgentEndAsserts(asserts, agentEndEvent, defaultCtx);
+    assert.strictEqual(failures.length, 1);
+    assert.ok(failures[0].includes("always-fail"));
+  });
+
+  // 6.10 ── when receives the same env vars as shell ────────────────
+
+  it("when receives the same env vars as shell", async () => {
+    const cwd = setupConfig("e2e-ae-when-env", {
+      "expensive-check": {
+        hook: "agent_end",
+        when: '[ "$PI_EVENT" = agent_end ]',
+        shell: "false",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+
+    const failures = await executeAgentEndAsserts(asserts, agentEndEvent, defaultCtx);
+    assert.strictEqual(failures.length, 1);
+    assert.ok(failures[0].includes("expensive-check"));
+  });
+
+  // 6.11 ── filter and when → both must match before shell runs ────
+
+  it("assert with filter and when → both must match before shell runs", async () => {
+    const cwd = setupConfig("e2e-ae-filter-and-when", {
+      "guard-git-clean": {
+        hook: "agent_end",
+        filter: { event: "agent_end" },
+        when: "true",
+        shell: "false",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+
+    // filter matches, when passes, shell fails → failure
+    const failures = await executeAgentEndAsserts(asserts, agentEndEvent, defaultCtx);
+    assert.strictEqual(failures.length, 1);
+    assert.ok(failures[0].includes("guard-git-clean"));
+  });
+
+  it("filter mismatch → assert skipped (never reaches when)", async () => {
+    const cwd = setupConfig("e2e-ae-filter-mismatch", {
+      "wrong-event": {
+        hook: "agent_end",
+        filter: { event: "tool_call" },
+        when: "true",
+        shell: "false",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+
+    const failures = await executeAgentEndAsserts(asserts, agentEndEvent, defaultCtx);
+    assert.deepStrictEqual(failures, []);
+  });
+
+  // 6.12 ── Signal propagation ────────────────────────────────────
+
+  it("ctx.signal aborts shell → recorded as failure", async () => {
+    const cwd = setupConfig("e2e-ae-signal", {
+      "slow-check": {
+        hook: "agent_end",
+        shell: "sleep 10",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 50);
+
+    const ctx: ExtensionContext = { cwd: "/tmp", signal: controller.signal };
+
+    const failures = await executeAgentEndAsserts(asserts, agentEndEvent, ctx);
+    assert.strictEqual(failures.length, 1);
+    assert.ok(failures[0].includes("slow-check"));
+  });
+
+  // 6.13 ── Failure message formatting ──────────────────────────────
+
+  it("failure message formatting matches index.ts", async () => {
+    const cwd = setupConfig("e2e-ae-formatting", {
+      "check-1": {
+        hook: "agent_end",
+        shell: "exit 42",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+    const failures = await executeAgentEndAsserts(asserts, agentEndEvent, defaultCtx);
+    assert.strictEqual(failures.length, 1);
+    assert.strictEqual(failures[0], "- **check-1**: `exit 42` (exit 42)");
+  });
+
+  // 6.14 ── Mixed hooks: only agent_end asserts run ────────────────
+
+  it("mixed hooks: only agent_end asserts produce failures", async () => {
+    const cwd = setupConfig("e2e-ae-mixed", {
+      "tool-guard": {
+        hook: "tool_call",
+        filter: { toolName: "write" },
+        shell: "false",
+      },
+      "end-guard": {
+        hook: "agent_end",
+        shell: "false",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+    assert.strictEqual(asserts.length, 2);
+
+    const failures = await executeAgentEndAsserts(asserts, agentEndEvent, defaultCtx);
+    assert.strictEqual(failures.length, 1);
+    assert.ok(failures[0].includes("end-guard"));
+    assert.ok(!failures[0].includes("tool-guard"));
   });
 });

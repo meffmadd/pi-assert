@@ -22,14 +22,10 @@ import {
 } from "./install.js";
 import {
   loadAsserts,
-  matchFilter,
-  buildEnv,
-  buildAgentEndEnv,
-  evaluateShell,
   type Assert,
-  type ShellResult,
   type AgentEndEvent,
 } from "./engine.js";
+import { executeToolCallAsserts, executeAgentEndAsserts } from "./executor.js";
 
 // ---------------------------------------------------------------------------
 // Persistent state shape
@@ -780,37 +776,14 @@ export default function (pi: ExtensionAPI) {
   // Intercept tool calls
   // -----------------------------------------------------------------------
   pi.on("tool_call", async (event, ctx) => {
-    const candidate: Record<string, unknown> = {
-      toolName: event.toolName,
-      ...event.input,
-    };
+    const activeList = asserts.filter((a) => activeAsserts.has(a.name));
+    const result = await executeToolCallAsserts(activeList, event, ctx);
 
-    for (const assert of asserts) {
-      if (assert.hook !== "tool_call") continue;
-      if (!activeAsserts.has(assert.name)) continue;
-      if (!matchFilter(assert.filter, candidate)) continue;
-
-      // Build env shared by both `when` and `shell`
-      const env = buildEnv(event, ctx);
-
-      // Run precondition if present — skip assert when it doesn't pass
-      if (assert.when) {
-        const precondition: ShellResult = await evaluateShell(assert.when, env, ctx.signal);
-        if (!precondition.passed) continue;
+    if (result) {
+      if (ctx.hasUI) {
+        ctx.ui.notify(result.reason, "error");
       }
-
-      // Run the main shell command
-      const result: ShellResult = await evaluateShell(assert.shell, env, ctx.signal);
-
-      if (!result.passed) {
-        const reason = `pi-assert: assertion "${assert.name}" rejected ${event.toolName} — \`${assert.shell}\``;
-
-        if (ctx.hasUI) {
-          ctx.ui.notify(reason, "error");
-        }
-
-        return { block: true, reason };
-      }
+      return result;
     }
   });
 
@@ -819,32 +792,8 @@ export default function (pi: ExtensionAPI) {
   // -----------------------------------------------------------------------
   pi.on("agent_end", async (event, ctx) => {
     const agentEndEvent = event as unknown as AgentEndEvent;
-    const candidate: Record<string, unknown> = {
-      event: "agent_end",
-    };
-
-    const failures: string[] = [];
-
-    for (const assert of asserts) {
-      if (assert.hook !== "agent_end") continue;
-      if (!activeAsserts.has(assert.name)) continue;
-      if (!matchFilter(assert.filter, candidate)) continue;
-
-      const env = buildAgentEndEnv(agentEndEvent, ctx);
-
-      if (assert.when) {
-        const precondition: ShellResult = await evaluateShell(assert.when, env, ctx.signal);
-        if (!precondition.passed) continue;
-      }
-
-      const result: ShellResult = await evaluateShell(assert.shell, env, ctx.signal);
-
-      if (!result.passed) {
-        failures.push(
-          `- **${assert.name}**: \`${assert.shell}\` (exit ${result.code})`,
-        );
-      }
-    }
+    const activeList = asserts.filter((a) => activeAsserts.has(a.name));
+    const failures = await executeAgentEndAsserts(activeList, agentEndEvent, ctx);
 
     if (failures.length > 0) {
       const body =

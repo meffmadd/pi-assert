@@ -87,6 +87,9 @@ describe("evaluateShell", () => {
       { label: "can grep PI_TOOL_INPUT",                shell: 'echo "$PI_TOOL_INPUT" | grep -q ls', vars: { PI_TOOL_INPUT: '{"command":"ls -la"}' },    expected: true },
       { label: "grep mismatch on PI_TOOL_INPUT → block", shell: 'echo "$PI_TOOL_INPUT" | grep -q missing', vars: { PI_TOOL_INPUT: '{"command":"ls -la"}' }, expected: false },
       { label: "can read PI_CWD",                       shell: '[ -n "$PI_CWD" ]',                vars: { PI_CWD: "/home/user/project" },               expected: true },
+      { label: "can read PI_EVENT (agent_end)",         shell: '[ "$PI_EVENT" = agent_end ]',     vars: { PI_EVENT: "agent_end" },                      expected: true },
+      { label: "non-matching PI_EVENT → block",         shell: '[ "$PI_EVENT" = tool_call ]',     vars: { PI_EVENT: "agent_end" },                      expected: false },
+      { label: "can read PI_CWD (agent_end)",           shell: '[ "$PI_CWD" = /workspace ]',      vars: { PI_CWD: "/workspace", PI_EVENT: "agent_end" }, expected: true },
     ];
 
     for (const { label, shell, vars, expected } of cases) {
