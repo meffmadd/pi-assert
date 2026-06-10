@@ -24,9 +24,11 @@ import {
   loadAsserts,
   matchFilter,
   buildEnv,
+  buildAgentEndEnv,
   evaluateShell,
   type Assert,
   type ShellResult,
+  type AgentEndEvent,
 } from "./engine.js";
 
 // ---------------------------------------------------------------------------
@@ -778,15 +780,15 @@ export default function (pi: ExtensionAPI) {
   // Intercept tool calls
   // -----------------------------------------------------------------------
   pi.on("tool_call", async (event, ctx) => {
+    const candidate: Record<string, unknown> = {
+      toolName: event.toolName,
+      ...event.input,
+    };
+
     for (const assert of asserts) {
-      // Only handle tool_call hook for now (future: tool_result, etc.)
       if (assert.hook !== "tool_call") continue;
-
-      // Skip if assert is not active
       if (!activeAsserts.has(assert.name)) continue;
-
-      // Skip if filter doesn't match
-      if (!matchFilter(assert.filter, event)) continue;
+      if (!matchFilter(assert.filter, candidate)) continue;
 
       // Build env shared by both `when` and `shell`
       const env = buildEnv(event, ctx);
@@ -809,6 +811,62 @@ export default function (pi: ExtensionAPI) {
 
         return { block: true, reason };
       }
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // Agent-end asserts (run when the agent finishes a prompt and goes idle)
+  // -----------------------------------------------------------------------
+  pi.on("agent_end", async (event, ctx) => {
+    const agentEndEvent = event as unknown as AgentEndEvent;
+    const candidate: Record<string, unknown> = {
+      event: "agent_end",
+    };
+
+    const failures: string[] = [];
+
+    for (const assert of asserts) {
+      if (assert.hook !== "agent_end") continue;
+      if (!activeAsserts.has(assert.name)) continue;
+      if (!matchFilter(assert.filter, candidate)) continue;
+
+      const env = buildAgentEndEnv(agentEndEvent, ctx);
+
+      if (assert.when) {
+        const precondition: ShellResult = await evaluateShell(assert.when, env, ctx.signal);
+        if (!precondition.passed) continue;
+      }
+
+      const result: ShellResult = await evaluateShell(assert.shell, env, ctx.signal);
+
+      if (!result.passed) {
+        failures.push(
+          `- **${assert.name}**: \`${assert.shell}\` (exit ${result.code})`,
+        );
+      }
+    }
+
+    if (failures.length > 0) {
+      const body =
+        `${failures.length} assertion${failures.length === 1 ? "" : "s"} failed after your last turn:\n\n` +
+        failures.join("\n");
+
+      if (ctx.hasUI) {
+        ctx.ui.notify(
+          `pi-assert: ${failures.length} agent_end assertion${failures.length === 1 ? "" : "s"} failed`,
+          "warning",
+        );
+      }
+
+      // Inject a custom message so the agent sees the failure and can fix it
+      pi.sendMessage(
+        {
+          customType: "pi-assert",
+          content: body,
+          display: true,
+        },
+        { triggerTurn: true },
+      );
     }
   });
 }

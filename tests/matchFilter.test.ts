@@ -1,5 +1,5 @@
 /**
- * Tests for matchFilter — filter matching against tool_call events.
+ * Tests for matchFilter — filter matching against candidate records.
  *
  * Usage: npm test
  */
@@ -8,6 +8,11 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import { matchFilter, type ToolCallEvent } from "../pi-assert/engine.js";
+
+// ── Helper: build a candidate record from a ToolCallEvent ─────────
+function candidateFrom(event: ToolCallEvent): Record<string, unknown> {
+  return { toolName: event.toolName, ...event.input };
+}
 
 // ── Shared events ──────────────────────────────────────────────────
 
@@ -61,10 +66,10 @@ describe("matchFilter", () => {
 
     for (const { label, filter } of cases) {
       it(label, () => {
-        assert.strictEqual(matchFilter(filter, writeEvent), true);
-        assert.strictEqual(matchFilter(filter, bashEvent), true);
-        assert.strictEqual(matchFilter(filter, editEvent), true);
-        assert.strictEqual(matchFilter(filter, emptyInput), true);
+        assert.strictEqual(matchFilter(filter, candidateFrom(writeEvent)), true);
+        assert.strictEqual(matchFilter(filter, candidateFrom(bashEvent)), true);
+        assert.strictEqual(matchFilter(filter, candidateFrom(editEvent)), true);
+        assert.strictEqual(matchFilter(filter, candidateFrom(emptyInput)), true);
       });
     }
   });
@@ -87,7 +92,7 @@ describe("matchFilter", () => {
 
     for (const { label, filter, event } of cases) {
       it(label, () => {
-        assert.strictEqual(matchFilter(filter, event), true);
+        assert.strictEqual(matchFilter(filter, candidateFrom(event)), true);
       });
     }
   });
@@ -109,7 +114,7 @@ describe("matchFilter", () => {
 
     for (const { label, filter, event } of cases) {
       it(label, () => {
-        assert.strictEqual(matchFilter(filter, event), false);
+        assert.strictEqual(matchFilter(filter, candidateFrom(event)), false);
       });
     }
   });
@@ -127,7 +132,7 @@ describe("matchFilter", () => {
 
     for (const { label, filter, event } of cases) {
       it(label, () => {
-        assert.strictEqual(matchFilter(filter, event), false);
+        assert.strictEqual(matchFilter(filter, candidateFrom(event)), false);
       });
     }
   });
@@ -155,7 +160,7 @@ describe("matchFilter", () => {
 
     for (const { label, filter, event, expected } of cases) {
       it(label, () => {
-        assert.strictEqual(matchFilter(filter, event), expected);
+        assert.strictEqual(matchFilter(filter, candidateFrom(event)), expected);
       });
     }
   });
@@ -179,8 +184,35 @@ describe("matchFilter", () => {
 
     for (const { label, filter, event, expected } of cases) {
       it(label, () => {
-        assert.strictEqual(matchFilter(filter, event), expected);
+        assert.strictEqual(matchFilter(filter, candidateFrom(event)), expected);
       });
     }
+  });
+
+  // ── Plain candidate (agent_end-style) ───────────────────────────
+
+  describe("plain candidate (no ToolCallEvent)", () => {
+    it("matches { event } candidate", () => {
+      assert.strictEqual(
+        matchFilter({ event: "agent_end" }, { event: "agent_end" }),
+        true,
+      );
+      assert.strictEqual(
+        matchFilter({ event: "agent_end" }, { event: "other" }),
+        false,
+      );
+    });
+
+    it("empty filter always matches plain candidate", () => {
+      assert.strictEqual(matchFilter(undefined, { event: "agent_end" }), true);
+      assert.strictEqual(matchFilter({}, { event: "agent_end" }), true);
+    });
+
+    it("key not in candidate → false", () => {
+      assert.strictEqual(
+        matchFilter({ toolName: "bash" }, { event: "agent_end" }),
+        false,
+      );
+    });
   });
 });

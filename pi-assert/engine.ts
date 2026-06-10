@@ -51,11 +51,17 @@ interface AssertsFile {
   [repo: string]: Record<string, AssertDefinition> | string | string[] | undefined;
 }
 
-/** Structured environment passed to every shell command. */
+/** Structured environment passed to shell commands for tool_call hooks. */
 export interface AssertEnv {
   PI_TOOL_NAME: string;
   PI_TOOL_CALL_ID: string;
   PI_TOOL_INPUT: string;
+  PI_CWD: string;
+}
+
+/** Structured environment passed to shell commands for agent_end hooks. */
+export interface AgentEndEnv {
+  PI_EVENT: string;
   PI_CWD: string;
 }
 
@@ -64,6 +70,11 @@ export interface ToolCallEvent {
   toolName: string;
   toolCallId: string;
   input: Record<string, unknown>;
+}
+
+/** Minimal shape of the agent_end event we consume. */
+export interface AgentEndEvent {
+  // agent_end has .messages but we don't need them for env/filter
 }
 
 /** Minimal shape of the extension context we consume. */
@@ -184,20 +195,18 @@ function isValidAssert(def: unknown): def is AssertDefinition {
 // ---------------------------------------------------------------------------
 
 /**
- * Check whether the optional filter matches the tool_call event.
+ * Check whether the optional filter matches a candidate record.
  * Every key in the filter must equal the corresponding value in
- * `{ toolName, ...event.input }`.  No filter → always matches.
+ * the candidate.  No filter → always matches.
+ *
+ * For tool_call hooks, the candidate is `{ toolName, ...event.input }`.
+ * For agent_end hooks, the candidate is `{ event: "agent_end" }`.
  */
 export function matchFilter(
   filter: Record<string, unknown> | undefined,
-  event: ToolCallEvent,
+  candidate: Record<string, unknown>,
 ): boolean {
   if (!filter) return true;
-
-  const candidate: Record<string, unknown> = {
-    toolName: event.toolName,
-    ...event.input,
-  };
 
   for (const key of Object.keys(filter)) {
     if (candidate[key] !== filter[key]) return false;
@@ -211,8 +220,7 @@ export function matchFilter(
 // ---------------------------------------------------------------------------
 
 /**
- * Build the environment variables passed to every shell command.
- * This is the single place to add new variables in the future.
+ * Build the environment variables passed to shell commands for tool_call hooks.
  */
 export function buildEnv(
   event: ToolCallEvent,
@@ -222,6 +230,19 @@ export function buildEnv(
     PI_TOOL_NAME: event.toolName,
     PI_TOOL_CALL_ID: event.toolCallId,
     PI_TOOL_INPUT: JSON.stringify(event.input),
+    PI_CWD: ctx.cwd,
+  };
+}
+
+/**
+ * Build the environment variables passed to shell commands for agent_end hooks.
+ */
+export function buildAgentEndEnv(
+  _event: AgentEndEvent,
+  ctx: ExtensionContext,
+): AgentEndEnv {
+  return {
+    PI_EVENT: "agent_end",
     PI_CWD: ctx.cwd,
   };
 }

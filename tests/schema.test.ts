@@ -280,9 +280,30 @@ describe("validate", () => {
     },
 
     {
-      label: "rejects 'tool_result' as hook (not yet in enum)",
+      label: "rejects 'tool_result' as hook (not in enum)",
       config: { local: { guard: { hook: "tool_result", shell: "true" } } },
       expected: false,
+    },
+
+    {
+      label: "accepts 'agent_end' as hook",
+      config: { local: { guard: { hook: "agent_end", shell: "true" } } },
+      expected: true,
+    },
+
+    {
+      label: "agent_end with when and default",
+      config: {
+        local: {
+          "check-git-clean": {
+            hook: "agent_end",
+            shell: "git diff --quiet",
+            when: "test -d .git",
+            default: true,
+          },
+        },
+      },
+      expected: true,
     },
   ];
 

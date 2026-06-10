@@ -6,7 +6,9 @@ fail user-defined shell checks.
 ## Architecture
 
 - **`pi-assert/index.ts`** — extension entry point. Subscribes to `session_start`
-  (load config) and `tool_call` (run matching asserts, block on failure).
+  (load config), `tool_call` (run matching asserts, block on failure), and
+  `agent_end` (run matching asserts, inject user message on failure so the
+  agent can address them).
 - **`pi-assert/engine.ts`** — config loading (`loadAsserts`), filter matching
   (`matchFilter`), environment builder (`buildEnv`), and shell execution
   (`evaluateShell` via `child_process.exec`).
