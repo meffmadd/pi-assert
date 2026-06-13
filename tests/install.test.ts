@@ -18,7 +18,7 @@ import {
   type RuleEntries,
   type RuleFile,
   type RuleEntry,
-} from "../pi-assert/install.js";
+} from "../pi-assert/installer.js";
 
 // ── Helpers ───────────────────────────────────────────────────────
 
