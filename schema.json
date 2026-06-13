@@ -36,8 +36,8 @@
       "properties": {
         "hook": {
           "type": "string",
-          "enum": ["tool_call", "agent_end"],
-          "description": "Pi event name to intercept. 'tool_call' fires before each tool executes; 'agent_end' fires when the agent finishes a prompt and goes idle."
+          "enum": ["tool_call", "tool_result", "agent_end"],
+          "description": "Pi event name to intercept. 'tool_call' fires before each tool executes; 'tool_result' fires after a tool runs (can patch the result); 'agent_end' fires when the agent finishes a prompt and goes idle."
         },
         "filter": {
           "type": "object",
@@ -48,7 +48,7 @@
         },
         "shell": {
           "type": "string",
-          "description": "Shell command whose exit code decides pass/fail. Exit 0 → allow; non-zero → block. Pipes, redirects, &&, || all work."
+          "description": "Shell command whose exit code decides pass/fail. Exit 0 → allow; non-zero → block (or trigger a new turn, for agent_end). Pipes, redirects, &&, || all work."
         },
         "when": {
           "type": "string",

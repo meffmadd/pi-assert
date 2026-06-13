@@ -25,7 +25,8 @@ import {
   type Assert,
   type AgentEndEvent,
 } from "./engine.js";
-import { executeToolCallAsserts, executeAgentEndAsserts } from "./executor.js";
+import { executeToolCallAsserts, executeAgentEndAsserts, executeToolResultAsserts } from "./executor.js";
+import type { ToolResultEvent } from "./engine.js";
 
 // ---------------------------------------------------------------------------
 // Persistent state shape
@@ -784,6 +785,22 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(result.reason, "error");
       }
       return result;
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // Intercept tool results (replace content with a redacted block on failure)
+  // -----------------------------------------------------------------------
+  pi.on("tool_result", async (event, ctx) => {
+    const resultEvent = event as unknown as ToolResultEvent;
+    const activeList = asserts.filter((a) => activeAsserts.has(a.name));
+    const result = await executeToolResultAsserts(activeList, resultEvent, ctx);
+
+    if (result) {
+      if (ctx.hasUI) {
+        ctx.ui.notify(result.reason, "error");
+      }
+      return result.patch;
     }
   });
 

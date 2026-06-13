@@ -7,8 +7,8 @@ description: Define shell-based assertions in .pi/asserts.json that block pi too
 
 pi-assert is a pi extension that reads an `asserts.json` file and enforces
 shell-based assertions against pi events. Each assert lets you block specific
-tool invocations or run checks at session shutdown based on a shell command's
-exit code.
+tool invocations, patch tool results, or run checks when the agent finishes
+a turn, all based on a shell command's exit code.
 
 ## asserts.json Format
 
@@ -41,14 +41,14 @@ VS Code and other editors will then provide:
 - Autocomplete for `hook`, `filter`, `shell`, `default`
 - Red squiggles on typos, missing required fields, or unknown properties
 - Hover tooltips with field descriptions
-- Enum suggestions (`"tool_call"`, `"agent_end"` for `hook`)
+- Enum suggestions (`"tool_call"`, `"tool_result"`, `"agent_end"` for `hook`)
 
 ### Fields
 
 | Field    | Required | Description |
 |----------|----------|-------------|
-| `hook`   | yes      | Pi event name: `"tool_call"` or `"agent_end"`. |
-| `filter` | no       | Key-value object matched against the event's candidate record. For `tool_call`: `{ toolName, ...event.input }`. For `agent_end`: `{ event: "agent_end" }`. Omitted → fires on every matching event. |
+| `hook`   | yes      | Pi event name: `"tool_call"`, `"tool_result"`, or `"agent_end"`. |
+| `filter` | no       | Key-value object matched against the event's candidate record. For `tool_call` and `tool_result`: `{ toolName, ...event.input }`. For `agent_end`: `{ event: "agent_end" }`. Omitted → fires on every matching event. |
 | `when`   | no       | Optional precondition shell command. The main `shell` only runs when this exits 0. Use to skip expensive asserts when they don't apply (e.g., only check writes to `.env` if the working tree is dirty). |
 | `shell`   | yes      | Shell command string. Pipes, redirects, `&&`, `||` all work — runs through a real shell. Exit 0 → allow; non-zero → block (or warn, for session_shutdown). |
 | `default` | no       | If `true`, this assert is active by default for new sessions. Defaults to `false` (inactive until manually enabled via `/asserts`). |
@@ -63,6 +63,17 @@ VS Code and other editors will then provide:
 | `PI_TOOL_CALL_ID` | Unique call identifier |
 | `PI_TOOL_INPUT`   | Tool input as a single-line JSON string |
 | `PI_CWD`          | Current working directory |
+
+### tool_result hooks
+
+| Variable           | Description |
+|--------------------|-------------|
+| `PI_TOOL_NAME`     | Tool that ran (e.g. `"read"`, `"bash"`) |
+| `PI_TOOL_CALL_ID`  | Unique call identifier |
+| `PI_TOOL_INPUT`    | Tool input as a single-line JSON string |
+| `PI_TOOL_RESULT`   | Tool result text content joined by newlines. Image content blocks are skipped. |
+| `PI_TOOL_IS_ERROR` | `"true"` or `"false"` — the tool's own error flag |
+| `PI_CWD`           | Current working directory |
 
 ### agent_end hooks
 
@@ -170,6 +181,48 @@ when the working tree is dirty — a cheap shell check before the assert kicks i
 }
 ```
 
+### Block secret patterns in tool results (tool_result hook)
+
+The `tool_result` hook fires after a tool runs and can **patch the result**
+when an assert fails — replacing the content with a redacted `[BLOCKED]`
+message and marking `isError: true` so the LLM never sees the original
+output. This is the only place to catch what a tool *returned* (e.g., a
+secret that leaked through an innocuous `read` of a `.env` file).
+
+```json
+{
+  "no-secrets-in-reads": {
+    "hook": "tool_result",
+    "filter": { "toolName": "read" },
+    "shell": "grep -qE '^[A-Z_]+=' <<< \"$PI_TOOL_RESULT\" && exit 1 || exit 0"
+  }
+}
+```
+
+Block PEM private keys regardless of which tool returned them:
+
+```json
+{
+  "no-pem-blocks": {
+    "hook": "tool_result",
+    "shell": "grep -qE -e '-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----' <<< \"$PI_TOOL_RESULT\" && exit 1 || exit 0"
+  }
+}
+```
+
+Defense-in-depth: block `read` results whose input path looks sensitive
+(useful when the `tool_call` filter is misconfigured):
+
+```json
+{
+  "block-sensitive-paths": {
+    "hook": "tool_result",
+    "filter": { "toolName": "read" },
+    "shell": "echo \"$PI_TOOL_INPUT\" | grep -qE '\"path\":\"[^\"]*(\\.env|\\.pem|\\.key|id_rsa)' && exit 1 || exit 0"
+  }
+}
+```
+
 ### Agent-end asserts
 
 Agent-end asserts run after the agent finishes processing a prompt and goes
@@ -208,6 +261,7 @@ Multiple agent-end asserts batch into a single message:
 1. Asserts are loaded from `.pi/asserts.json` at session start.
 2. Only asserts with `"default": true` are active initially. Others must be enabled via `/asserts`. Once toggled, the selection persists across session restarts.
 3. On each `tool_call`, all active, matching asserts run FIFO (first non-passing assert blocks the tool).
-4. On `agent_end`, all active, matching asserts run FIFO. Failures are batched into a custom message and trigger a new turn so the agent can address them.
-5. A block shows an error notification in the TUI.
-6. The `false` Unix command always exits 1 — use it for unconditional blocks.
+4. On each `tool_result`, all active, matching asserts run FIFO. The first non-passing assert replaces the result content with a `[BLOCKED by pi-assert]` message and marks it as an error so the LLM never sees the original output.
+5. On `agent_end`, all active, matching asserts run FIFO. Failures are batched into a custom message and trigger a new turn so the agent can address them.
+6. A block shows an error notification in the TUI.
+7. The `false` Unix command always exits 1 — use it for unconditional blocks.

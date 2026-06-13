@@ -2,6 +2,7 @@ import { exec } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -65,6 +66,16 @@ export interface AgentEndEnv {
   PI_CWD: string;
 }
 
+/** Structured environment passed to shell commands for tool_result hooks. */
+export interface ToolResultEnv {
+  PI_TOOL_NAME: string;
+  PI_TOOL_CALL_ID: string;
+  PI_TOOL_INPUT: string;
+  PI_TOOL_RESULT: string;
+  PI_TOOL_IS_ERROR: "true" | "false";
+  PI_CWD: string;
+}
+
 /** Minimal shape of the tool_call event we consume. */
 export interface ToolCallEvent {
   toolName: string;
@@ -75,6 +86,25 @@ export interface ToolCallEvent {
 /** Minimal shape of the agent_end event we consume. */
 export interface AgentEndEvent {
   // agent_end has .messages but we don't need them for env/filter
+}
+
+// Content block types come from pi-ai (transitive dep of pi-coding-agent).
+
+/** Minimal shape of the tool_result event we consume. */
+export interface ToolResultEvent {
+  toolName: string;
+  toolCallId: string;
+  input: Record<string, unknown>;
+  content: (TextContent | ImageContent)[];
+  isError: boolean;
+  details?: unknown;
+}
+
+/** Patch returned from a tool_result handler. */
+export interface ToolResultPatch {
+  content?: (TextContent | ImageContent)[];
+  details?: unknown;
+  isError?: boolean;
 }
 
 /** Minimal shape of the extension context we consume. */
@@ -200,6 +230,7 @@ function isValidAssert(def: unknown): def is AssertDefinition {
  * the candidate.  No filter → always matches.
  *
  * For tool_call hooks, the candidate is `{ toolName, ...event.input }`.
+ * For tool_result hooks, the candidate is `{ toolName, ...event.input }`.
  * For agent_end hooks, the candidate is `{ event: "agent_end" }`.
  */
 export function matchFilter(
@@ -243,6 +274,31 @@ export function buildAgentEndEnv(
 ): AgentEndEnv {
   return {
     PI_EVENT: "agent_end",
+    PI_CWD: ctx.cwd,
+  };
+}
+
+/**
+ * Build the environment variables passed to shell commands for tool_result hooks.
+ *
+ * `PI_TOOL_RESULT` is the concatenation of all text content blocks joined by
+ * `\n`. Image content blocks are skipped (no textual representation to grep
+ * against).
+ */
+export function buildResultEnv(
+  event: ToolResultEvent,
+  ctx: ExtensionContext,
+): ToolResultEnv {
+  const textSegments = event.content
+    .filter((c): c is TextContent => c.type === "text")
+    .map((c) => c.text);
+
+  return {
+    PI_TOOL_NAME: event.toolName,
+    PI_TOOL_CALL_ID: event.toolCallId,
+    PI_TOOL_INPUT: JSON.stringify(event.input),
+    PI_TOOL_RESULT: textSegments.join("\n"),
+    PI_TOOL_IS_ERROR: event.isError ? "true" : "false",
     PI_CWD: ctx.cwd,
   };
 }

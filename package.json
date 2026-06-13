@@ -29,7 +29,8 @@
     "test": "node --import tsx --test tests/*.test.ts"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*"
   },
   "devDependencies": {
     "ajv": "^8.20.0",

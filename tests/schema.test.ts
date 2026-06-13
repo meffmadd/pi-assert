@@ -280,8 +280,30 @@ describe("validate", () => {
     },
 
     {
-      label: "rejects 'tool_result' as hook (not in enum)",
+      label: "accepts 'tool_result' as hook",
       config: { local: { guard: { hook: "tool_result", shell: "true" } } },
+      expected: true,
+    },
+
+    {
+      label: "tool_result with filter and when",
+      config: {
+        local: {
+          "block-secrets-in-reads": {
+            hook: "tool_result",
+            filter: { toolName: "read" },
+            shell: "grep -qE 'SECRET' <<< \"$PI_TOOL_RESULT\" && exit 1 || exit 0",
+            when: "true",
+            default: false,
+          },
+        },
+      },
+      expected: true,
+    },
+
+    {
+      label: "rejects 'session_shutdown' as hook (not in enum)",
+      config: { local: { guard: { hook: "session_shutdown", shell: "true" } } },
       expected: false,
     },
 
