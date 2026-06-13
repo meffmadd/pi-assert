@@ -15,6 +15,9 @@ import {
   removeRule,
   addRepo,
   getInstalledRepos,
+  buildRepoPickerItems,
+  REPO_ADD_ACTION,
+  DEFAULT_REPO,
   type RuleEntries,
   type RuleFile,
   type RuleEntry,
@@ -742,5 +745,56 @@ describe("addRepo", () => {
     const cwd = join(tmpRoot, "add-repo-bad");
     mkdirSync(cwd, { recursive: true });
     assert.throws(() => addRepo(cwd, "not-a-repo"), /Invalid repo format/);
+  });
+});
+
+// ── Wizard helpers (pure) ─────────────────────────────────────────
+
+describe("REPO_ADD_ACTION", () => {
+  it("is the sentinel string '__add__'", () => {
+    assert.equal(REPO_ADD_ACTION, "__add__");
+  });
+});
+
+describe("buildRepoPickerItems", () => {
+  it("returns only the Add repo item when no repos are configured", () => {
+    assert.deepEqual(buildRepoPickerItems([]), [
+      { value: REPO_ADD_ACTION, label: "Add repo…" },
+    ]);
+  });
+
+  it("lists existing repos first, then the Add repo item", () => {
+    assert.deepEqual(buildRepoPickerItems(["a/b", "c/d"]), [
+      { value: "a/b", label: "a/b" },
+      { value: "c/d", label: "c/d" },
+      { value: REPO_ADD_ACTION, label: "Add repo…" },
+    ]);
+  });
+
+  it("preserves the order of input repos", () => {
+    const repos = ["z/y", "a/b", "m/n"];
+    const result = buildRepoPickerItems(repos);
+    assert.deepEqual(
+      result.slice(0, repos.length).map((r) => r.value),
+      repos,
+    );
+  });
+
+  it("appends exactly one Add repo item regardless of input size", () => {
+    assert.equal(buildRepoPickerItems([]).length, 1);
+    assert.equal(buildRepoPickerItems(["a/b"]).length, 2);
+    assert.equal(buildRepoPickerItems(["a/b", "c/d", "e/f"]).length, 4);
+  });
+
+  it("places the Add repo item last in the list", () => {
+    const result = buildRepoPickerItems(["a/b", "c/d"]);
+    assert.equal(result[result.length - 1]!.value, REPO_ADD_ACTION);
+  });
+});
+
+describe("DEFAULT_REPO", () => {
+  it("is a non-empty owner/repo string", () => {
+    assert.equal(typeof DEFAULT_REPO, "string");
+    assert.match(DEFAULT_REPO, /^[^/]+\/[^/]+$/);
   });
 });

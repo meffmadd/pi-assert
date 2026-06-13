@@ -1,5 +1,6 @@
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
+import type { SelectItem } from "@earendil-works/pi-tui";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -273,4 +274,26 @@ export function addRepo(cwd: string, repo: string): void {
 
   current.repos.push(repo);
   writeFile(cwd, current);
+}
+
+// ---------------------------------------------------------------------------
+// Wizard helpers (pure: no I/O, no UI calls)
+// ---------------------------------------------------------------------------
+
+/** Sentinel value for the "Add repo…" action item in the repo picker. */
+export const REPO_ADD_ACTION = "__add__";
+
+/** Default repo suggested when adding a repo with none configured. */
+export const DEFAULT_REPO =
+  process.env.PI_ASSERT_DEFAULT_REPO ?? "meffmadd/pi-assert-rules";
+
+/**
+ * Build the items list for the repo picker.
+ * Lists existing repos first, then a trailing "Add repo…" action item.
+ */
+export function buildRepoPickerItems(repos: string[]): SelectItem[] {
+  return [
+    ...repos.map((r) => ({ value: r, label: r })),
+    { value: REPO_ADD_ACTION, label: "Add repo…" },
+  ];
 }
