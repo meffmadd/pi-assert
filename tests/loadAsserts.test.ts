@@ -8,9 +8,13 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 
-import { loadAsserts, type Assert } from "../pi-assert/engine.js";
+import {
+  AssertsParseError,
+  loadAsserts,
+  type Assert,
+} from "../pi-assert/engine.js";
 
 // ── Temp dir helpers ───────────────────────────────────────────────
 
@@ -826,12 +830,120 @@ describe("loadAsserts", () => {
 
   // ── Standalone: malformed JSON throws ────────────────────────────
 
-  it("malformed JSON → throws", () => {
+  it("malformed project JSON → throws AssertsParseError pointing at project file", () => {
     clearGlobal();
-    const dir = join(tmpRoot, "malformed");
+    const dir = join(tmpRoot, "malformed-project");
     mkdirSync(join(dir, ".pi"), { recursive: true });
     writeFileSync(join(dir, ".pi", "asserts.json"), "{broken");
 
-    assert.throws(() => loadAsserts(dir));
+    let caught: unknown;
+    try {
+      loadAsserts(dir);
+    } catch (err) {
+      caught = err;
+    }
+
+    assert.ok(
+      caught instanceof AssertsParseError,
+      `expected AssertsParseError, got ${caught}`,
+    );
+    const e = caught as AssertsParseError;
+    assert.strictEqual(e.errors.length, 1);
+    assert.strictEqual(e.errors[0].path, join(dir, ".pi", "asserts.json"));
+    assert.match(e.errors[0].reason, /JSON|JSON|token|position|end/i);
+  });
+
+  it("malformed global JSON + valid project → throws with one error (global) and project asserts are not loaded", () => {
+    clearGlobal();
+    // Global is broken
+    mkdirSync(join(tmpRoot, ".pi"), { recursive: true });
+    writeFileSync(join(tmpRoot, ".pi", "asserts.json"), "{broken");
+
+    // Project is valid
+    const dir = join(tmpRoot, "global-broken");
+    mkdirSync(join(dir, ".pi"), { recursive: true });
+    writeFileSync(
+      join(dir, ".pi", "asserts.json"),
+      JSON.stringify({
+        local: { guard: { hook: "tool_call", shell: "true" } },
+      }),
+    );
+
+    let caught: unknown;
+    try {
+      loadAsserts(dir);
+    } catch (err) {
+      caught = err;
+    }
+
+    assert.ok(caught instanceof AssertsParseError);
+    const e = caught as AssertsParseError;
+    assert.strictEqual(e.errors.length, 1);
+    assert.strictEqual(
+      e.errors[0].path,
+      join(homedir(), ".pi", "asserts.json"),
+    );
+  });
+
+  it("malformed project JSON + valid global → throws with one error (project) and global asserts are not loaded", () => {
+    // Valid global
+    mkdirSync(join(tmpRoot, ".pi"), { recursive: true });
+    writeFileSync(
+      join(tmpRoot, ".pi", "asserts.json"),
+      JSON.stringify({
+        local: { "global-rule": { hook: "tool_call", shell: "true" } },
+      }),
+    );
+
+    // Broken project
+    const dir = join(tmpRoot, "project-broken");
+    mkdirSync(join(dir, ".pi"), { recursive: true });
+    writeFileSync(join(dir, ".pi", "asserts.json"), "{broken");
+
+    let caught: unknown;
+    try {
+      loadAsserts(dir);
+    } catch (err) {
+      caught = err;
+    }
+
+    assert.ok(caught instanceof AssertsParseError);
+    const e = caught as AssertsParseError;
+    assert.strictEqual(e.errors.length, 1);
+    assert.strictEqual(e.errors[0].path, join(dir, ".pi", "asserts.json"));
+  });
+
+  it("both files malformed → throws with two errors", () => {
+    mkdirSync(join(tmpRoot, ".pi"), { recursive: true });
+    writeFileSync(join(tmpRoot, ".pi", "asserts.json"), "{broken-global");
+
+    const dir = join(tmpRoot, "both-broken");
+    mkdirSync(join(dir, ".pi"), { recursive: true });
+    writeFileSync(join(dir, ".pi", "asserts.json"), "{broken-project");
+
+    let caught: unknown;
+    try {
+      loadAsserts(dir);
+    } catch (err) {
+      caught = err;
+    }
+
+    assert.ok(caught instanceof AssertsParseError);
+    const e = caught as AssertsParseError;
+    assert.strictEqual(e.errors.length, 2);
+    const paths = new Set(e.errors.map((er) => er.path));
+    assert.deepStrictEqual(paths, new Set([
+      join(dir, ".pi", "asserts.json"),
+      join(homedir(), ".pi", "asserts.json"),
+    ]));
+  });
+
+  it("empty file → throws AssertsParseError", () => {
+    clearGlobal();
+    const dir = join(tmpRoot, "empty");
+    mkdirSync(join(dir, ".pi"), { recursive: true });
+    writeFileSync(join(dir, ".pi", "asserts.json"), "");
+
+    assert.throws(() => loadAsserts(dir), AssertsParseError);
   });
 });

@@ -1,5 +1,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { loadAsserts, type Assert } from "../engine.js";
+import {
+  AssertsParseError,
+  loadAsserts,
+  type Assert,
+  type LoadError,
+} from "../engine.js";
 
 // ---------------------------------------------------------------------------
 // Persistent state shape
@@ -16,22 +21,62 @@ export class AssertsState {
   asserts: Assert[] = [];
   active: Set<string> = new Set();
 
+  /**
+   * `true` when the most recent `load()` failed to parse one or more
+   * asserts.json files.  In that state, `asserts` is always empty and the
+   * status bar shows an error indicator.
+   */
+  broken = false;
+
+  /** Per-file parse errors from the most recent `load()`. Empty when healthy. */
+  loadErrors: LoadError[] = [];
+
   constructor(private pi: ExtensionAPI) {}
 
   // ── Loading ────────────────────────────────────────────────────────
-  /** Reload asserts from disk for the given cwd. */
+  /**
+   * Reload asserts from disk for the given cwd.
+   *
+   * If parsing fails, swallows the `AssertsParseError`, sets `broken = true`,
+   * clears `asserts`, and stores the per-file errors in `loadErrors`.  The
+   * extension must not apply any asserts in that state.  Non-parse errors
+   * (e.g. unexpected runtime issues) are re-thrown.
+   */
   load(cwd: string): void {
-    this.asserts = loadAsserts(cwd);
+    try {
+      this.asserts = loadAsserts(cwd);
+      this.broken = false;
+      this.loadErrors = [];
+    } catch (err) {
+      if (err instanceof AssertsParseError) {
+        this.asserts = [];
+        this.active = new Set();
+        this.broken = true;
+        this.loadErrors = err.errors;
+        return;
+      }
+      throw err;
+    }
   }
 
   // ── Status bar ─────────────────────────────────────────────────────
   /** Update the "pi-assert" status bar entry. */
   updateStatus(ctx: ExtensionContext): void {
+    const theme = ctx.ui.theme;
+
+    if (this.broken) {
+      const n = this.loadErrors.length;
+      ctx.ui.setStatus(
+        "pi-assert",
+        theme.fg("error", `pi-assert: config error (${n} file${n === 1 ? "" : "s"})`),
+      );
+      return;
+    }
+
     if (this.asserts.length === 0) {
       ctx.ui.setStatus("pi-assert", undefined);
       return;
     }
-    const theme = ctx.ui.theme;
     const color = this.active.size > 0 ? "accent" : "dim";
     ctx.ui.setStatus(
       "pi-assert",

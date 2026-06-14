@@ -265,3 +265,4 @@ Multiple agent-end asserts batch into a single message:
 5. On `agent_end`, all active, matching asserts run FIFO. Failures are batched into a custom message and trigger a new turn so the agent can address them.
 6. A block shows an error notification in the TUI.
 7. The `false` Unix command always exits 1 — use it for unconditional blocks.
+8. If either `asserts.json` fails to parse, pi-assert shows an error notification naming the file and the parse error, **no asserts are loaded**, and the status bar shows `pi-assert: config error (N files)` until the file is fixed. This is a hard-fail — a broken config blocks all asserts, even from a working sibling file.

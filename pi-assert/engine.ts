@@ -123,12 +123,44 @@ interface ResolvedAssert {
   def: AssertDefinition;
 }
 
+/** A single per-file parse failure. */
+export interface LoadError {
+  /** Absolute path of the file that failed. */
+  path: string;
+  /** Short reason suitable for a notification (e.g. SyntaxError message). */
+  reason: string;
+}
+
+/**
+ * Thrown by `loadAsserts` when one or both asserts.json files cannot be
+ * parsed.  Carries a list of per-file errors so the UI can name the
+ * offending file(s) and reason(s) in a single notification.
+ *
+ * The caller is expected to treat any instance of this error as a
+ * hard-fail: do not apply partial results.
+ */
+export class AssertsParseError extends Error {
+  readonly errors: LoadError[];
+  constructor(errors: LoadError[]) {
+    super(
+      `Failed to parse ${errors.length} asserts.json file${errors.length === 1 ? "" : "s"}`,
+    );
+    this.name = "AssertsParseError";
+    this.errors = errors;
+  }
+}
+
 /**
  * Load asserts from `.pi/asserts.json` (project) and `~/.pi/asserts.json`
  * (global).  Project-level entries override global entries by source + name.
+ *
+ * Throws `AssertsParseError` if either file fails to parse.  No asserts are
+ * returned in that case — callers must treat the error as a hard-fail and
+ * not apply partial results.
  */
 export function loadAsserts(cwd: string): Assert[] {
   const merged = new Map<string, ResolvedAssert>();
+  const errors: LoadError[] = [];
 
   // Read repos from project file to build known set (also applies to global)
   const projectPath = join(cwd, ".pi", "asserts.json");
@@ -146,24 +178,45 @@ export function loadAsserts(cwd: string): Assert[] {
         );
         knownRepos.add("local");
       }
-    } catch {
-      // Ignore parse errors; will be handled by readSections
+    } catch (err) {
+      // Record and skip the repos pre-read; the full read below will
+      // record the same error if the file is still broken.
+      errors.push({ path: projectPath, reason: formatParseError(err) });
     }
   }
 
   // 1. Global
   const globalPath = join(homedir(), ".pi", "asserts.json");
   if (existsSync(globalPath)) {
-    for (const entry of readSections(globalPath, knownRepos)) {
-      merged.set(key(entry), entry);
+    try {
+      for (const entry of readSections(globalPath, knownRepos)) {
+        merged.set(key(entry), entry);
+      }
+    } catch (err) {
+      // Replace any pre-read error for the same path so we don't double-count
+      upsertError(errors, {
+        path: globalPath,
+        reason: formatParseError(err),
+      });
     }
   }
 
   // 2. Project (overrides global by source+name)
   if (existsSync(projectPath)) {
-    for (const entry of readSections(projectPath, knownRepos)) {
-      merged.set(key(entry), entry);
+    try {
+      for (const entry of readSections(projectPath, knownRepos)) {
+        merged.set(key(entry), entry);
+      }
+    } catch (err) {
+      upsertError(errors, {
+        path: projectPath,
+        reason: formatParseError(err),
+      });
     }
+  }
+
+  if (errors.length > 0) {
+    throw new AssertsParseError(errors);
   }
 
   return Array.from(merged.values()).map(({ name, source, def }) => ({
@@ -175,6 +228,23 @@ export function loadAsserts(cwd: string): Assert[] {
     shell: def.shell,
     default: def.default ?? false,
   }));
+}
+
+/** Extract a short, human-readable reason from a JSON parse error. */
+function formatParseError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+/** Insert a LoadError, replacing any existing entry for the same path. */
+function upsertError(errors: LoadError[], next: LoadError): void {
+  for (let i = 0; i < errors.length; i++) {
+    if (errors[i].path === next.path) {
+      errors[i] = next;
+      return;
+    }
+  }
+  errors.push(next);
 }
 
 function key(e: ResolvedAssert): string {

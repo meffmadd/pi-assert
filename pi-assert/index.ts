@@ -21,6 +21,22 @@ export default function (pi: ExtensionAPI) {
   // ── Load asserts on session start ─────────────────────────────────
   pi.on("session_start", (_event, ctx) => {
     state.load(ctx.cwd);
+
+    // Hard-fail: if either asserts.json file failed to parse, do NOT restore
+    // any active set, do NOT install any asserts, and tell the user.
+    if (state.broken) {
+      const n = state.loadErrors.length;
+      const details = state.loadErrors
+        .map((e) => `  • ${e.path}: ${e.reason}`)
+        .join("\n");
+      ctx.ui.notify(
+        `pi-assert: failed to parse ${n} config file${n === 1 ? "" : "s"}; no asserts are active.\n${details}`,
+        "error",
+      );
+      state.updateStatus(ctx);
+      return;
+    }
+
     state.restore(ctx);
     state.updateStatus(ctx);
 
