@@ -23,47 +23,36 @@ export interface Assert {
   shell: string;
   /** Whether this assert is active by default for new sessions (default false). */
   default: boolean;
-}
-
-/** Raw shape of each assert value before we attach the key as name. */
-interface AssertDefinition {
-  hook: string;
-  filter?: Record<string, unknown>;
-  /** Optional precondition shell command. Only runs `shell` if this exits 0. */
-  when?: string;
-  shell: string;
-  /** If true, this assert is active by default for new sessions. Defaults to false. */
-  default?: boolean;
+  /**
+   * Absolute path of the asserts.json file this entry was loaded from.
+   * Populated by `loadAsserts` so the UI can write back to the correct
+   * file when toggling `default`. Optional because callers may construct
+   * `Assert` objects by hand (e.g. in tests).
+   */
+  path?: string;
 }
 
 /**
- * Shape of an asserts.json file.
- *
- * Top-level keys are section names:
- * - `"local"` → user-defined asserts (protected from removal)
- * - `"$schema"` → ignored
- * - `"repos"` → array of known repo keys (e.g. ["meffmadd/pi-assert-rules"])
- * - `"owner/repo"` → asserts installed from that repo (removable)
+ * Shape of an asserts.json file — documented in `readSections`, which is
+ * the only place that needs to understand the layout.  Kept here for
+ * future maintainers; no runtime checks use this name.
  */
-interface AssertsFile {
-  $schema?: string;
-  local?: Record<string, AssertDefinition>;
-  repos?: string[];
-  [repo: string]: Record<string, AssertDefinition> | string | string[] | undefined;
-}
-
 /** Structured environment passed to shell commands for tool_call hooks. */
 export interface AssertEnv {
   PI_TOOL_NAME: string;
   PI_TOOL_CALL_ID: string;
   PI_TOOL_INPUT: string;
   PI_CWD: string;
+  /** Index signature lets these flow into `child_process.exec`'s `env`. */
+  [key: string]: string;
 }
 
 /** Structured environment passed to shell commands for agent_end hooks. */
 export interface AgentEndEnv {
   PI_EVENT: string;
   PI_CWD: string;
+  /** Index signature lets these flow into `child_process.exec`'s `env`. */
+  [key: string]: string;
 }
 
 /** Structured environment passed to shell commands for tool_result hooks. */
@@ -74,6 +63,8 @@ export interface ToolResultEnv {
   PI_TOOL_RESULT: string;
   PI_TOOL_IS_ERROR: "true" | "false";
   PI_CWD: string;
+  /** Index signature lets these flow into `child_process.exec`'s `env`. */
+  [key: string]: string;
 }
 
 /** Minimal shape of the tool_call event we consume. */
@@ -84,9 +75,10 @@ export interface ToolCallEvent {
 }
 
 /** Minimal shape of the agent_end event we consume. */
-export interface AgentEndEvent {
-  // agent_end has .messages but we don't need them for env/filter
-}
+// The event has a `.messages` field we don't need, so the interface is
+// empty by design (lint allow).
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface AgentEndEvent {}
 
 // Content block types come from pi-ai (transitive dep of pi-coding-agent).
 
@@ -117,11 +109,11 @@ export interface ExtensionContext {
 // Config loading
 // ---------------------------------------------------------------------------
 
-interface ResolvedAssert {
-  name: string;
-  source: string;
-  def: AssertDefinition;
-}
+/**
+ * On-disk shape of an assert value (no `name`, no `source` — those come from
+ * the section structure in the file).
+ */
+type AssertOnDisk = Omit<Assert, "name" | "source" | "path">;
 
 /** A single per-file parse failure. */
 export interface LoadError {
@@ -152,14 +144,23 @@ export class AssertsParseError extends Error {
 
 /**
  * Load asserts from `.pi/asserts.json` (project) and `~/.pi/asserts.json`
- * (global).  Project-level entries override global entries by source + name.
+ * (global) and return the merged list.  Project-level entries override
+ * global entries by source + name.
  *
- * Throws `AssertsParseError` if either file fails to parse.  No asserts are
- * returned in that case — callers must treat the error as a hard-fail and
- * not apply partial results.
+ * Every returned `Assert` has `path` populated with the absolute path
+ * of the asserts.json file it came from.  The UI uses this to write
+ * `default` toggles back to the correct file.
+ *
+ * Throws `AssertsParseError` if either file fails to parse.  No asserts
+ * are returned in that case — callers must treat the error as a
+ * hard-fail and not apply partial results.
  */
 export function loadAsserts(cwd: string): Assert[] {
-  const merged = new Map<string, ResolvedAssert>();
+  // The merge map is keyed by `${source}\x00${name}` and the value carries
+  // the path of the file that produced it.  Project reads come second, so
+  // `merged.set(key, …)` naturally overwrites any global entry for the
+  // same key — including its `path`.
+  const merged = new Map<string, Assert>();
   const errors: LoadError[] = [];
 
   // Read repos from project file to build known set (also applies to global)
@@ -190,7 +191,7 @@ export function loadAsserts(cwd: string): Assert[] {
   if (existsSync(globalPath)) {
     try {
       for (const entry of readSections(globalPath, knownRepos)) {
-        merged.set(key(entry), entry);
+        merged.set(keyOf(entry), entry);
       }
     } catch (err) {
       // Replace any pre-read error for the same path so we don't double-count
@@ -205,7 +206,7 @@ export function loadAsserts(cwd: string): Assert[] {
   if (existsSync(projectPath)) {
     try {
       for (const entry of readSections(projectPath, knownRepos)) {
-        merged.set(key(entry), entry);
+        merged.set(keyOf(entry), entry);
       }
     } catch (err) {
       upsertError(errors, {
@@ -219,15 +220,7 @@ export function loadAsserts(cwd: string): Assert[] {
     throw new AssertsParseError(errors);
   }
 
-  return Array.from(merged.values()).map(({ name, source, def }) => ({
-    name,
-    source,
-    hook: def.hook,
-    filter: def.filter,
-    when: def.when,
-    shell: def.shell,
-    default: def.default ?? false,
-  }));
+  return Array.from(merged.values());
 }
 
 /** Extract a short, human-readable reason from a JSON parse error. */
@@ -247,18 +240,18 @@ function upsertError(errors: LoadError[], next: LoadError): void {
   errors.push(next);
 }
 
-function key(e: ResolvedAssert): string {
-  return `${e.source}\x00${e.name}`;
+function keyOf(a: Assert): string {
+  return `${a.source}\x00${a.name}`;
 }
 
-/** Flatten a sectioned asserts file into (source, name, def) triples. */
+/** Flatten a sectioned asserts file into fully-attached `Assert` objects. */
 function readSections(
   path: string,
   knownRepos?: Set<string>,
-): ResolvedAssert[] {
+): Assert[] {
   const content = readFileSync(path, "utf-8");
   const raw = JSON.parse(content) as Record<string, unknown>;
-  const results: ResolvedAssert[] = [];
+  const results: Assert[] = [];
 
   // If knownRepos is provided, only accept those sections.
   // If undefined, accept every object-typed section (backward compat).
@@ -276,7 +269,16 @@ function readSections(
       entries as Record<string, unknown>,
     )) {
       if (isValidAssert(def)) {
-        results.push({ name, source: section, def });
+        results.push({
+          name,
+          source: section,
+          hook: def.hook,
+          filter: def.filter,
+          when: def.when,
+          shell: def.shell,
+          default: def.default ?? false,
+          path,
+        });
       }
     }
   }
@@ -284,7 +286,7 @@ function readSections(
   return results;
 }
 
-function isValidAssert(def: unknown): def is AssertDefinition {
+function isValidAssert(def: unknown): def is AssertOnDisk {
   if (typeof def !== "object" || def === null) return false;
   const d = def as Record<string, unknown>;
   return typeof d.hook === "string" && typeof d.shell === "string";
@@ -397,7 +399,7 @@ export function evaluateShell(
   signal?: AbortSignal,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<ShellResult> {
-  return new Promise<ShellResult>((resolve, reject) => {
+  return new Promise<ShellResult>((resolve, _reject) => {
     // Merge our env on top of process.env so the shell inherits PATH etc.
     const mergedEnv = { ...process.env, ...env };
 
@@ -414,7 +416,12 @@ export function evaluateShell(
         resolve({ passed: false, code: null });
         return;
       }
-      if (err.killed) {
+      // `killed` is set on ChildProcess error events (timeout / signal) but
+      // not exposed on the `ErrnoException` type.  Cast through `unknown`
+      // so we don't lie about the static type while still reading the
+      // runtime property Node sets.
+      const killed = (err as unknown as { killed?: boolean }).killed;
+      if (killed) {
         // Timeout or signal killed the process → block.
         resolve({ passed: false, code: null });
         return;

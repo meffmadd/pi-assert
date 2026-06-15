@@ -266,3 +266,13 @@ Multiple agent-end asserts batch into a single message:
 6. A block shows an error notification in the TUI.
 7. The `false` Unix command always exits 1 — use it for unconditional blocks.
 8. If either `asserts.json` fails to parse, pi-assert shows an error notification naming the file and the parse error, **no asserts are loaded**, and the status bar shows `pi-assert: config error (N files)` until the file is fixed. This is a hard-fail — a broken config blocks all asserts, even from a working sibling file.
+
+## Toggling `default` from the UI
+
+In the `/asserts` panel, press `t` on the focused assert to flip its
+`default` flag in the source `asserts.json` (project or global,
+whichever owns the entry). Defaults-marked asserts are tagged with
+`(default)` in the panel. Note: toggling `default` only affects
+**future** sessions with no saved session config; the current
+session's active set is unchanged — press `Enter`/`Space` to
+enable/disable the assert right now.

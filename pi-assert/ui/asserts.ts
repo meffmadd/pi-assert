@@ -1,15 +1,14 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
   Container,
   matchesKey,
   Key,
   SettingsList,
-  Text,
-  getSettingsListTheme,
   type SettingItem,
+  type SettingsListTheme,
 } from "@earendil-works/pi-tui";
 import type { Assert } from "../engine.js";
-import { removeRule } from "../installer.js";
+import { removeRule, setAssertDefault } from "../installer.js";
 import { SectionNavigator } from "./components.js";
 import type { AssertsState } from "./state.js";
 import { runInstallWizard } from "./install.js";
@@ -59,7 +58,7 @@ export class AssertsPanel {
   // ── Render ─────────────────────────────────────────────────────────
   render(width: number): string[] {
     if (this.groups.length === 0) {
-      return [themeLine("dim", "No asserts defined.")];
+      return [this.theme.fg("dim", "No asserts defined.")];
     }
 
     if (this.confirm) {
@@ -76,7 +75,7 @@ export class AssertsPanel {
       const isFocused = i === this.nav.focusedSection;
       const headerColor = isFocused ? "accent" : "muted";
       const header = g.source === "local" ? "Local" : g.source;
-      lines.push(`  ${themeLine(headerColor, header)}`);
+      lines.push(`  ${this.theme.fg(headerColor, header)}`);
 
       lines.push(
         ...this.renderSection(width, g, isFocused, this.nav.focusedIndex),
@@ -100,9 +99,10 @@ export class AssertsPanel {
       const lines: string[] = [];
       for (const a of group.asserts) {
         const status = this.state.active.has(a.name)
-          ? themeLine("muted", "enabled")
-          : themeLine("dim", "disabled");
-        lines.push(`   ${themeLine("muted", a.name)}  ${status}`);
+          ? this.theme.fg("muted", "enabled")
+          : this.theme.fg("dim", "disabled");
+        const tag = a.default ? this.theme.fg("dim", " (default)") : "";
+        lines.push(`   ${this.theme.fg("muted", a.name)}${tag}  ${status}`);
       }
       return lines;
     }
@@ -110,16 +110,36 @@ export class AssertsPanel {
     // Active section: render via SettingsList and strip its built-in hint
     const items: SettingItem[] = group.asserts.map((a) => ({
       id: a.name,
-      label: a.name,
+      label: a.default ? `${a.name} (default)` : a.name,
       currentValue: this.state.active.has(a.name) ? "enabled" : "disabled",
       values: ["enabled", "disabled"],
     }));
 
-    const sl = new SettingsList(items, Math.min(items.length + 3, 10), {
-      ...getSettingsListTheme(),
-      selectedPrefix: (t: string) => this.theme.fg("accent", "> "),
-      selectedText: (t: string) => this.theme.fg("accent", t),
-    });
+    // The panel drives all key handling itself (see `handleInput`), so the
+    // SettingsList here is purely a renderer.  The `onChange` and
+    // `onCancel` callbacks are never invoked by us, but the constructor
+    // requires them — provide no-op stubs.
+    const settingsTheme: SettingsListTheme = {
+      label: (text, selected) =>
+        selected ? this.theme.fg("accent", text) : text,
+      value: (text, selected) =>
+        selected
+          ? this.theme.fg("accent", text)
+          : this.theme.fg("dim", text),
+      description: (text) => this.theme.fg("muted", text),
+      cursor: this.theme.fg("accent", "> "),
+      hint: (text) => this.theme.fg("dim", text),
+    };
+
+    const sl = new SettingsList(
+      items,
+      Math.min(items.length + 3, 10),
+      settingsTheme,
+      // onChange — never reached (the panel toggles via its own handleInput)
+      (_id, _newValue) => {},
+      // onCancel — never reached (Esc is handled at the dialog level)
+      () => {},
+    );
 
     const listLines = sl.render(_width);
     // Strip the SettingsList's built-in hint (last 2 lines: blank + "Enter/Space to change")
@@ -139,18 +159,27 @@ export class AssertsPanel {
     const focused = this.groups[this.nav.focusedSection];
     const removeHint =
       focused && focused.source !== "local" ? acc("d") + dim(" Remove · ") : "";
-    return dim("  Enter/Space to change · ") + removeHint + acc("i") + dim(" Install asserts · Esc to cancel");
+    return (
+      dim("  Enter/Space enable · ") +
+      acc("t") + dim(" Toggle default · ") +
+      removeHint +
+      acc("i") + dim(" Install asserts · Esc to cancel")
+    );
   }
 
   // ── Theme access ───────────────────────────────────────────────────
   // We capture the theme at construction time (passed in by ctx.ui.custom).
-  private _theme: any;
+  // The `!` is safe: the panel is always created and rendered inside
+  // `ctx.ui.custom(...)`, which calls `setTheme(theme)` before the
+  // first `render()`.  TypeScript can't see that ordering, so we assert
+  // definite assignment.
+  private _theme!: Theme;
 
-  setTheme(theme: any): void {
+  setTheme(theme: Theme): void {
     this._theme = theme;
   }
 
-  private get theme(): any {
+  private get theme(): Theme {
     return this._theme;
   }
 
@@ -197,6 +226,42 @@ export class AssertsPanel {
       return undefined;
     }
 
+    // ── t: toggle on-disk `default` flag (per-session active set untouched) ──
+    if (matchesKey(data, "t")) {
+      const selected = focused.asserts[this.nav.focusedIndex];
+      if (!selected) return undefined;
+
+      if (!selected.path) {
+        ctx.ui.notify(
+          `pi-assert: cannot locate "${selected.name}" on disk`,
+          "error",
+        );
+        return undefined;
+      }
+
+      try {
+        const next = !selected.default;
+        setAssertDefault(selected.path, focused.source, selected.name, next);
+
+        // Mirror the new value to the in-memory `Assert` so the next render
+        // shows the (default) tag.  The panel's `group.asserts` array shares
+        // object references with `state.asserts` (both were built from the
+        // same `loadAsserts` result), so mutating the live entry mutates
+        // both views.  Reloading here would create new objects and break
+        // that link.
+        const live = this.state.asserts.find(
+          (a) => a.source === focused.source && a.name === selected.name,
+        );
+        if (live) live.default = next;
+      } catch (err) {
+        ctx.ui.notify(
+          `pi-assert: failed to toggle default — ${String(err)}`,
+          "error",
+        );
+      }
+      return undefined;
+    }
+
     // ── Enter / Space: toggle ──
     if (matchesKey(data, "enter") || matchesKey(data, "space")) {
       const selected = focused.asserts[this.nav.focusedIndex];
@@ -228,13 +293,6 @@ export class AssertsPanel {
 }
 
 // ---------------------------------------------------------------------------
-// themeLine — tiny helper that swallows the `any` theme once, locally.
-// ---------------------------------------------------------------------------
-function themeLine(theme: any, role: string, text: string): string {
-  return theme.fg(role, text);
-}
-
-// ---------------------------------------------------------------------------
 // runAssertsCommand — shows the panel, runs install on demand, and loops
 // back so a freshly installed rule is immediately toggleable.
 // ---------------------------------------------------------------------------
@@ -245,7 +303,9 @@ export function registerAssertsCommand(
   pi.registerCommand("asserts", {
     description: "Activate / deactivate asserts",
     handler: async (_args, ctx) => {
-      // eslint-disable-next-line no-constant-condition
+      // The `while (true)` loop is intentional: it re-enters the panel
+      // after `install` and `reload` actions so freshly installed /
+      // removed asserts are immediately toggleable.
       while (true) {
         state.load(ctx.cwd);
         // Prune stale active entries that no longer exist

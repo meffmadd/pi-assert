@@ -144,12 +144,22 @@ interface SectionedFile {
   [repo: string]: unknown;
 }
 
-function readFile(cwd: string): SectionedFile {
-  const projectPath = join(cwd, ".pi", "asserts.json");
+/** Resolve the project .pi/asserts.json path for a given cwd. */
+function projectFilePath(cwd: string): string {
+  return join(cwd, ".pi", "asserts.json");
+}
 
-  if (!existsSync(projectPath)) return {};
+/**
+ * Path-based read of a sectioned asserts file.  Returns `{}` when the
+ * file is missing or unparseable (the latter matches the historical
+ * behaviour of the cwd-based helper and keeps install/remove
+ * best-effort).  Used by the cwd-based `readFile` and by
+ * `setAssertDefault` when the caller already knows the absolute path.
+ */
+function readSectionedFile(path: string): SectionedFile {
+  if (!existsSync(path)) return {};
 
-  const raw = readFileSync(projectPath, "utf-8");
+  const raw = readFileSync(path, "utf-8");
   try {
     const parsed = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return {};
@@ -159,15 +169,21 @@ function readFile(cwd: string): SectionedFile {
   }
 }
 
-function writeFile(cwd: string, data: SectionedFile): void {
-  const projectPath = join(cwd, ".pi", "asserts.json");
-  const dir = dirname(projectPath);
-
+/** Path-based write of a sectioned asserts file.  Creates parent dirs. */
+function writeSectionedFile(path: string, data: SectionedFile): void {
+  const dir = dirname(path);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
+  writeFileSync(path, JSON.stringify(data, null, 2) + "\n", "utf-8");
+}
 
-  writeFileSync(projectPath, JSON.stringify(data, null, 2) + "\n", "utf-8");
+function readFile(cwd: string): SectionedFile {
+  return readSectionedFile(projectFilePath(cwd));
+}
+
+function writeFile(cwd: string, data: SectionedFile): void {
+  writeSectionedFile(projectFilePath(cwd), data);
 }
 
 // ---------------------------------------------------------------------------
@@ -246,6 +262,52 @@ export function removeRule(
 
   writeFile(cwd, current);
   return true;
+}
+
+/**
+ * Set the `default` flag of a single assert in the on-disk file.
+ *
+ * Writes the file in place (path can be project or global; the caller
+ * picks the right one via the source-map cache).  When `value` is
+ * `true` the entry gains a `"default": true` key; when `value` is
+ * `false` the key is **deleted** (cleaner than writing `false`, since
+ * `false` is the schema default and matches the installer's
+ * "omit when false" pattern).
+ *
+ * Throws when the file does not exist, the section is missing, or the
+ * assert entry is missing — these are bugs or stale external edits
+ * that the UI surfaces via a notification.
+ */
+export function setAssertDefault(
+  path: string,
+  source: string,
+  name: string,
+  value: boolean,
+): void {
+  const current = readSectionedFile(path);
+
+  const section = current[source] as Record<string, unknown> | undefined;
+  if (!section || typeof section !== "object" || !(name in section)) {
+    throw new Error(
+      `assert "${name}" not found in section "${source}" of ${path}`,
+    );
+  }
+
+  const entry = section[name];
+  if (typeof entry !== "object" || entry === null) {
+    throw new Error(
+      `assert "${name}" in section "${source}" of ${path} is not an object`,
+    );
+  }
+  const obj = entry as Record<string, unknown>;
+
+  if (value) {
+    obj.default = true;
+  } else {
+    delete obj.default;
+  }
+
+  writeSectionedFile(path, current);
 }
 
 /**

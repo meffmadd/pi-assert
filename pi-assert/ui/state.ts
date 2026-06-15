@@ -7,13 +7,6 @@ import {
 } from "../engine.js";
 
 // ---------------------------------------------------------------------------
-// Persistent state shape
-// ---------------------------------------------------------------------------
-export interface AssertsState {
-  activeAsserts: string[];
-}
-
-// ---------------------------------------------------------------------------
 // AssertsState — owns the model: loaded asserts, active set, persistence,
 // and the status bar entry.
 // ---------------------------------------------------------------------------
@@ -87,7 +80,7 @@ export class AssertsState {
   // ── Persistence ────────────────────────────────────────────────────
   /** Persist the current active set to the session branch. */
   persist(): void {
-    this.pi.appendEntry<AssertsState>("pi-assert-config", {
+    this.pi.appendEntry("pi-assert-config", {
       activeAsserts: Array.from(this.active),
     });
   }
@@ -105,7 +98,7 @@ export class AssertsState {
         entry.type === "custom" &&
         entry.customType === "pi-assert-config"
       ) {
-        const data = entry.data as AssertsState | undefined;
+        const data = entry.data as { activeAsserts?: string[] } | undefined;
         if (data?.activeAsserts) {
           saved = data.activeAsserts;
         }

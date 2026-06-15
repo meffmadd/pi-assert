@@ -15,6 +15,7 @@ import {
   removeRule,
   addRepo,
   getInstalledRepos,
+  setAssertDefault,
   buildRepoPickerItems,
   REPO_ADD_ACTION,
   DEFAULT_REPO,
@@ -796,5 +797,306 @@ describe("DEFAULT_REPO", () => {
   it("is a non-empty owner/repo string", () => {
     assert.equal(typeof DEFAULT_REPO, "string");
     assert.match(DEFAULT_REPO, /^[^/]+\/[^/]+$/);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// setAssertDefault — flip the on-disk `default` flag of a single assert
+// in a known asserts.json file.  Used by the /asserts UI `t` keybinding.
+// ═══════════════════════════════════════════════════════════════════
+
+describe("setAssertDefault", () => {
+  type Case = {
+    label: string;
+    /** Use the project file? (false → global file under tmpRoot) */
+    useProject: boolean;
+    initialJson: object;
+    source: string;
+    name: string;
+    value: boolean;
+    expectedEntry: Record<string, unknown>;
+    /** Expected top-level keys after the write (preserved structure). */
+    expectedTopLevel: Record<string, unknown>;
+  };
+
+  const projectPath = (cwd: string) => join(cwd, ".pi", "asserts.json");
+  const globalPath = () => join(tmpRoot, ".pi", "asserts.json");
+
+  const cases: Case[] = [
+    // ── Setting default: true ────────────────────────────────────
+    {
+      label: "adds `default: true` to an assert that had no `default` field",
+      useProject: true,
+      initialJson: {
+        local: { "no-default": { hook: "tool_call", shell: "true" } },
+      },
+      source: "local",
+      name: "no-default",
+      value: true,
+      expectedEntry: { hook: "tool_call", shell: "true", default: true },
+      expectedTopLevel: {
+        local: { "no-default": { hook: "tool_call", shell: "true", default: true } },
+      },
+    },
+    {
+      label: "flips `default: false` to `default: true`",
+      useProject: true,
+      initialJson: {
+        local: { rule: { hook: "tool_call", shell: "false", default: false } },
+      },
+      source: "local",
+      name: "rule",
+      value: true,
+      expectedEntry: { hook: "tool_call", shell: "false", default: true },
+      expectedTopLevel: {
+        local: { rule: { hook: "tool_call", shell: "false", default: true } },
+      },
+    },
+    {
+      label: "preserves sibling keys when adding `default`",
+      useProject: true,
+      initialJson: {
+        local: {
+          rule: {
+            hook: "tool_call",
+            filter: { toolName: "bash" },
+            when: "true",
+            shell: "false",
+          },
+        },
+      },
+      source: "local",
+      name: "rule",
+      value: true,
+      expectedEntry: {
+        hook: "tool_call",
+        filter: { toolName: "bash" },
+        when: "true",
+        shell: "false",
+        default: true,
+      },
+      expectedTopLevel: {
+        local: {
+          rule: {
+            hook: "tool_call",
+            filter: { toolName: "bash" },
+            when: "true",
+            shell: "false",
+            default: true,
+          },
+        },
+      },
+    },
+
+    // ── Setting default: false (delete the key) ─────────────────
+    {
+      label: "deletes the `default` key when called with false (instead of writing false)",
+      useProject: true,
+      initialJson: {
+        local: { rule: { hook: "tool_call", shell: "false", default: true } },
+      },
+      source: "local",
+      name: "rule",
+      value: false,
+      expectedEntry: { hook: "tool_call", shell: "false" },
+      expectedTopLevel: {
+        local: { rule: { hook: "tool_call", shell: "false" } },
+      },
+    },
+    {
+      label: "deleting `default` from an entry that has none is a no-op (still not present)",
+      useProject: true,
+      initialJson: {
+        local: { rule: { hook: "tool_call", shell: "true" } },
+      },
+      source: "local",
+      name: "rule",
+      value: false,
+      expectedEntry: { hook: "tool_call", shell: "true" },
+      expectedTopLevel: {
+        local: { rule: { hook: "tool_call", shell: "true" } },
+      },
+    },
+
+    // ── Preserves surrounding file structure ────────────────────
+    {
+      label: "preserves the rest of the file's structure and content",
+      useProject: true,
+      initialJson: {
+        $schema: "https://example.com/schema.json",
+        repos: ["owner/repo"],
+        local: {
+          a: { hook: "tool_call", shell: "true" },
+          b: { hook: "tool_call", shell: "false", default: true },
+        },
+        "owner/repo": {
+          c: { hook: "tool_call", shell: "false" },
+        },
+      },
+      source: "owner/repo",
+      name: "c",
+      value: true,
+      expectedEntry: { hook: "tool_call", shell: "false", default: true },
+      expectedTopLevel: {
+        $schema: "https://example.com/schema.json",
+        repos: ["owner/repo"],
+        local: {
+          a: { hook: "tool_call", shell: "true" },
+          b: { hook: "tool_call", shell: "false", default: true },
+        },
+        "owner/repo": {
+          c: { hook: "tool_call", shell: "false", default: true },
+        },
+      },
+    },
+
+    // ── Works against the global file too ────────────────────────
+    {
+      label: "writes to the global file when given a global path",
+      useProject: false,
+      initialJson: {
+        local: { "g-rule": { hook: "tool_call", shell: "true" } },
+      },
+      source: "local",
+      name: "g-rule",
+      value: true,
+      expectedEntry: { hook: "tool_call", shell: "true", default: true },
+      expectedTopLevel: {
+        local: { "g-rule": { hook: "tool_call", shell: "true", default: true } },
+      },
+    },
+  ];
+
+  for (const {
+    label,
+    useProject,
+    initialJson,
+    source,
+    name,
+    value,
+    expectedTopLevel,
+  } of cases) {
+    it(label, () => {
+      const cwd = join(tmpRoot, `set-default-${label.replace(/[^a-z0-9-]/gi, "-")}`);
+
+      // Reset global state from the loadAsserts suite so it doesn't
+      // bleed into this test.
+      try {
+        rmSync(join(tmpRoot, ".pi"), { recursive: true, force: true });
+      } catch { /* ok */ }
+
+      const path = useProject ? projectPath(cwd) : globalPath();
+      // Ensure the parent dir exists for the global-path case
+      mkdirSync(join(path, ".."), { recursive: true });
+      writeFileSync(path, JSON.stringify(initialJson));
+
+      setAssertDefault(path, source, name, value);
+
+      const raw = readFileSync(path, "utf-8");
+      const parsed = JSON.parse(raw);
+      assert.deepStrictEqual(parsed, expectedTopLevel);
+    });
+  }
+
+  // ── Throws cases ─────────────────────────────────────────────
+
+  type ThrowsCase = {
+    label: string;
+    useProject: boolean;
+    initialJson: object | undefined;
+    source: string;
+    name: string;
+    value: boolean;
+    errorPattern: RegExp;
+  };
+
+  const throwsCases: ThrowsCase[] = [
+    {
+      label: "throws when the section is missing",
+      useProject: true,
+      initialJson: { local: { rule: { hook: "tool_call", shell: "true" } } },
+      source: "other/repo",
+      name: "rule",
+      value: true,
+      errorPattern: /not found in section/,
+    },
+    {
+      label: "throws when the assert is missing in the section",
+      useProject: true,
+      initialJson: { local: { rule: { hook: "tool_call", shell: "true" } } },
+      source: "local",
+      name: "nonexistent",
+      value: true,
+      errorPattern: /not found in section/,
+    },
+    {
+      label: "throws when the file is missing",
+      useProject: true,
+      initialJson: undefined,
+      source: "local",
+      name: "rule",
+      value: true,
+      errorPattern: /not found in section/,
+    },
+    {
+      label: "throws when the assert value is not an object",
+      useProject: true,
+      initialJson: { local: { "bad-rule": "just a string" } },
+      source: "local",
+      name: "bad-rule",
+      value: true,
+      errorPattern: /is not an object/,
+    },
+  ];
+
+  for (const {
+    label,
+    useProject,
+    initialJson,
+    source,
+    name,
+    value,
+    errorPattern,
+  } of throwsCases) {
+    it(label, () => {
+      const cwd = join(tmpRoot, `set-default-throws-${label.replace(/[^a-z0-9-]/gi, "-")}`);
+
+      try {
+        rmSync(join(tmpRoot, ".pi"), { recursive: true, force: true });
+      } catch { /* ok */ }
+
+      const path = useProject ? projectPath(cwd) : globalPath();
+      if (initialJson !== undefined) {
+        mkdirSync(join(path, ".."), { recursive: true });
+        writeFileSync(path, JSON.stringify(initialJson));
+      } else {
+        // Make sure neither the project nor the global file exists
+        try { rmSync(join(path, ".."), { recursive: true, force: true }); } catch { /* ok */ }
+      }
+
+      assert.throws(() => setAssertDefault(path, source, name, value), errorPattern);
+    });
+  }
+
+  // ── File is rewritten with 2-space indent + trailing newline ─
+
+  it("writes the file as pretty-printed JSON (2-space indent) with a trailing newline", () => {
+    const cwd = join(tmpRoot, "set-default-pretty");
+    try {
+      rmSync(join(tmpRoot, ".pi"), { recursive: true, force: true });
+    } catch { /* ok */ }
+    const path = projectPath(cwd);
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify({ local: { r: { hook: "tool_call", shell: "true" } } }),
+    );
+
+    setAssertDefault(path, "local", "r", true);
+
+    const raw = readFileSync(path, "utf-8");
+    assert.match(raw, /\n$/, "trailing newline");
+    assert.match(raw, /^\{\n {2}"local"/, "2-space indent");
+    assert.match(raw, /"default": true/);
   });
 });

@@ -824,7 +824,11 @@ describe("loadAsserts", () => {
       clearGlobal();
       if (globalJson !== undefined) makeGlobal(globalJson);
       const cwd = setupCwd(i, projectJson);
-      assert.deepStrictEqual(loadAsserts(cwd), expected);
+      // Strip the engine-internal `path` field so the table stays focused
+      // on the user-visible assertion shape.  Provenance is covered by
+      // the dedicated `loadAsserts — Assert.path provenance` suite below.
+      const actual = loadAsserts(cwd).map(({ path: _path, ...rest }) => rest);
+      assert.deepStrictEqual(actual, expected);
     });
   }
 
@@ -945,5 +949,121 @@ describe("loadAsserts", () => {
     writeFileSync(join(dir, ".pi", "asserts.json"), "");
 
     assert.throws(() => loadAsserts(dir), AssertsParseError);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// `Assert.path` provenance — every loaded assert carries the absolute
+// path of the asserts.json file it came from.  The toggle UI uses this
+// to write `default` flags back to the correct file.
+// ═══════════════════════════════════════════════════════════════════
+
+describe("loadAsserts — Assert.path provenance", () => {
+  const globalPath = () => join(tmpRoot, ".pi", "asserts.json");
+  const projectPath = (dir: string) => join(dir, ".pi", "asserts.json");
+
+  it("no asserts loaded → empty array, no path leakage", () => {
+    clearGlobal();
+    const dir = join(tmpRoot, "path-empty");
+    mkdirSync(dir, { recursive: true });
+    const asserts = loadAsserts(dir);
+    assert.deepStrictEqual(asserts, []);
+  });
+
+  it("project-only entry carries the project file path", () => {
+    clearGlobal();
+    const dir = join(tmpRoot, "path-project-only");
+    mkdirSync(join(dir, ".pi"), { recursive: true });
+    writeFileSync(
+      projectPath(dir),
+      JSON.stringify({
+        local: { guard: { hook: "tool_call", shell: "false" } },
+      }),
+    );
+
+    const asserts = loadAsserts(dir);
+    assert.strictEqual(asserts.length, 1);
+    assert.strictEqual(asserts[0]?.path, projectPath(dir));
+  });
+
+  it("global-only entry carries the global file path", () => {
+    clearGlobal();
+    makeGlobal({
+      local: { "g-rule": { hook: "tool_call", shell: "true" } },
+    });
+    const dir = join(tmpRoot, "path-global-only");
+    mkdirSync(dir, { recursive: true });
+
+    const asserts = loadAsserts(dir);
+    assert.strictEqual(asserts.length, 1);
+    assert.strictEqual(asserts[0]?.path, globalPath());
+  });
+
+  it("project overrides global: override keeps the project path, sibling keeps the global path", () => {
+    clearGlobal();
+    makeGlobal({
+      local: {
+        shared: { hook: "tool_call", shell: "global-shell" },
+        "g-only": { hook: "tool_call", shell: "g" },
+      },
+    });
+    const dir = join(tmpRoot, "path-override");
+    mkdirSync(join(dir, ".pi"), { recursive: true });
+    writeFileSync(
+      projectPath(dir),
+      JSON.stringify({
+        local: {
+          shared: { hook: "tool_call", shell: "project-shell" },
+        },
+      }),
+    );
+
+    const asserts = loadAsserts(dir);
+    const shared = asserts.find((a) => a.name === "shared");
+    const gOnly = asserts.find((a) => a.name === "g-only");
+    assert.strictEqual(shared?.path, projectPath(dir));
+    assert.strictEqual(gOnly?.path, globalPath());
+  });
+
+  it("$schema and repos are not exposed as asserts (no spurious path entries)", () => {
+    clearGlobal();
+    const dir = join(tmpRoot, "path-skip-meta");
+    mkdirSync(join(dir, ".pi"), { recursive: true });
+    writeFileSync(
+      projectPath(dir),
+      JSON.stringify({
+        $schema: "https://example.com/schema.json",
+        repos: ["owner/repo"],
+        local: { rule: { hook: "tool_call", shell: "true" } },
+      }),
+    );
+
+    const asserts = loadAsserts(dir);
+    assert.strictEqual(asserts.length, 1);
+    assert.strictEqual(asserts[0]?.name, "rule");
+    assert.strictEqual(asserts[0]?.path, projectPath(dir));
+  });
+
+  it("same name in different sources stays distinct (no path collisions)", () => {
+    clearGlobal();
+    const dir = join(tmpRoot, "path-distinct-sources");
+    mkdirSync(join(dir, ".pi"), { recursive: true });
+    writeFileSync(
+      projectPath(dir),
+      JSON.stringify({
+        local: { guard: { hook: "tool_call", shell: "false" } },
+        "other/repo": { guard: { hook: "tool_call", shell: "true" } },
+      }),
+    );
+
+    const asserts = loadAsserts(dir);
+    assert.strictEqual(asserts.length, 2);
+    for (const a of asserts) {
+      assert.strictEqual(a.path, projectPath(dir));
+      assert.strictEqual(a.name, "guard");
+    }
+    // sanity: the two records are actually different sources
+    const sources = new Set(asserts.map((a) => a.source));
+    assert.strictEqual(sources.size, 2);
   });
 });

@@ -1,7 +1,8 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import {
+  Component,
   Container,
-  DynamicBorder,
   matchesKey,
   Key,
   SelectList,
@@ -14,7 +15,7 @@ import {
 // pieces.  The build functions return Container ready to be returned from
 // ctx.ui.custom's render.
 // ---------------------------------------------------------------------------
-function titledBox(theme: Theme, title: string, children: unknown[]): Container {
+function titledBox(theme: Theme, title: string, children: Component[]): Container {
   const container = new Container();
   container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
   container.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
