@@ -3,9 +3,6 @@ import {
   Container,
   matchesKey,
   Key,
-  SettingsList,
-  type SettingItem,
-  type SettingsListTheme,
 } from "@earendil-works/pi-tui";
 import type { Assert } from "../engine.js";
 import { removeRule, setAssertDefault } from "../installer.js";
@@ -107,50 +104,36 @@ export class AssertsPanel {
       return lines;
     }
 
-    // Active section: render via SettingsList and strip its built-in hint
-    const items: SettingItem[] = group.asserts.map((a) => ({
-      id: a.name,
-      label: a.default ? `${a.name} (default)` : a.name,
-      currentValue: this.state.active.has(a.name) ? "enabled" : "disabled",
-      values: ["enabled", "disabled"],
-    }));
-
-    // The panel drives all key handling itself (see `handleInput`), so the
-    // SettingsList here is purely a renderer.  The `onChange` and
-    // `onCancel` callbacks are never invoked by us, but the constructor
-    // requires them — provide no-op stubs.
-    const settingsTheme: SettingsListTheme = {
-      label: (text, selected) =>
-        selected ? this.theme.fg("accent", text) : text,
-      value: (text, selected) =>
-        selected
-          ? this.theme.fg("accent", text)
-          : this.theme.fg("dim", text),
-      description: (text) => this.theme.fg("muted", text),
-      cursor: this.theme.fg("accent", "> "),
-      hint: (text) => this.theme.fg("dim", text),
-    };
-
-    const sl = new SettingsList(
-      items,
-      Math.min(items.length + 3, 10),
-      settingsTheme,
-      // onChange — never reached (the panel toggles via its own handleInput)
-      (_id, _newValue) => {},
-      // onCancel — never reached (Esc is handled at the dialog level)
-      () => {},
+    // Active section: render manually so the navigator's selected index is
+    // respected.  (A fresh SettingsList always starts at selectedIndex 0, so
+    // it cannot follow our external keyboard focus.)
+    const maxLabelWidth = Math.max(
+      ...group.asserts.map((a) =>
+        (a.default ? `${a.name} (default)` : a.name).length
+      ),
     );
 
-    const listLines = sl.render(_width);
-    // Strip the SettingsList's built-in hint (last 2 lines: blank + "Enter/Space to change")
-    if (
-      listLines.length >= 2 &&
-      listLines[listLines.length - 2] === "" &&
-      listLines[listLines.length - 1]?.includes("Enter/Space to change")
-    ) {
-      listLines.length -= 2;
+    const lines: string[] = [];
+    for (let i = 0; i < group.asserts.length; i++) {
+      const a = group.asserts[i];
+      const selected = i === _selectedIndex;
+      const label = a.default ? `${a.name} (default)` : a.name;
+      const status = this.state.active.has(a.name) ? "enabled" : "disabled";
+      const padding = " ".repeat(Math.max(0, maxLabelWidth - label.length));
+
+      const prefix = selected
+        ? this.theme.fg("accent", "> ")
+        : "  ";
+      const labelText = selected
+        ? this.theme.fg("accent", label + padding)
+        : label + padding;
+      const valueText = selected
+        ? this.theme.fg("accent", status)
+        : this.theme.fg("dim", status);
+
+      lines.push(`${prefix}${labelText}  ${valueText}`);
     }
-    return listLines;
+    return lines;
   }
 
   private hintLine(): string {
