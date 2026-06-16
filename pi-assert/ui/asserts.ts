@@ -1,12 +1,13 @@
-import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
+  Box,
   Container,
   matchesKey,
   Key,
 } from "@earendil-works/pi-tui";
 import type { Assert } from "../engine.js";
 import { removeRule, setAssertDefault } from "../installer.js";
-import { SectionNavigator } from "./components.js";
+import { DIALOG_MIN_WIDTH, DIALOG_WIDTH, SectionNavigator } from "./components.js";
 import type { AssertsState } from "./state.js";
 import { runInstallWizard } from "./install.js";
 
@@ -75,20 +76,28 @@ export class AssertsPanel {
     }
 
     // Header (3 lines) and footer (2 lines) are reserved; the active
-    // section is the anchor, then we expand outward with whole inactive
-    // sections only when they fully fit.
+    // section is the anchor. Adjacent section headers are always shown;
+    // remaining space is filled with active asserts, then farther sections.
     const available = terminalHeight - 5;
     const focusedSection = this.nav.focusedSection;
     const activeGroup = this.groups[focusedSection];
     const activeLen = activeGroup.asserts.length;
 
-    // Reserve one extra line for the scroll indicator when the active
-    // section is windowed.
-    const activeVisible =
-      activeLen < 4
-        ? activeLen
-        : Math.max(4, Math.min(activeLen, available - 2));
-    const windowed = activeVisible < activeLen;
+    // Always reserve space for the previous/next section headers and the
+    // separators between them and the active section.
+    const showPrev = focusedSection > 0;
+    const showNext = focusedSection < this.groups.length - 1;
+    const reserved =
+      1 + // active section header
+      (showPrev ? 2 : 0) + // prev header + separator
+      (showNext ? 2 : 0); // next header + separator
+
+    let activeBudget = Math.max(1, available - reserved);
+    const windowed = activeLen > activeBudget;
+    if (windowed) {
+      activeBudget = Math.max(1, activeBudget - 1); // scroll indicator
+    }
+    const activeVisible = Math.min(activeLen, activeBudget);
 
     const [start, end] = this.activeWindow(activeVisible);
 
@@ -113,9 +122,25 @@ export class AssertsPanel {
       );
     }
 
+    // Always show the immediate previous and next section headers.
+    if (showPrev) {
+      lines = [
+        this.renderSectionHeader(this.groups[focusedSection - 1], false),
+        "",
+        ...lines,
+      ];
+    }
+    if (showNext) {
+      lines = [
+        ...lines,
+        "",
+        this.renderSectionHeader(this.groups[focusedSection + 1], false),
+      ];
+    }
+
     let remaining = available - lines.length;
-    let above = focusedSection - 1;
-    let below = focusedSection + 1;
+    let above = focusedSection - (showPrev ? 2 : 1);
+    let below = focusedSection + (showNext ? 2 : 1);
 
     let progressed = true;
     while (
@@ -437,12 +462,26 @@ export function registerAssertsCommand(
             const panel = new AssertsPanel(state);
             panel.setTheme(theme);
 
-            const container = new Container();
-            container.addChild({
-              render: (w: number) => panel.render(w, tui.terminal.rows),
+            const panelHeight = Math.max(
+              10,
+              Math.floor(tui.terminal.rows * 0.8) - 2,
+            );
+
+            const panelComponent = {
+              render: (w: number) => panel.render(w, panelHeight),
               invalidate: () => {},
               handleInput: () => {},
-            });
+            };
+
+            const box = new Box(
+              2,
+              1,
+              (s: string) => theme.bg("customMessageBg", s),
+            );
+            box.addChild(panelComponent);
+
+            const container = new Container();
+            container.addChild(box);
 
             return {
               render: (w: number) => container.render(w),
@@ -455,6 +494,16 @@ export function registerAssertsCommand(
                 tui.requestRender();
               },
             };
+          },
+          {
+            overlay: true,
+            overlayOptions: {
+              anchor: "center",
+              width: DIALOG_WIDTH,
+              minWidth: DIALOG_MIN_WIDTH,
+              maxHeight: "80%",
+              margin: 4,
+            },
           },
         );
 

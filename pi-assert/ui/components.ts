@@ -11,6 +11,14 @@ import {
 } from "@earendil-works/pi-tui";
 
 // ---------------------------------------------------------------------------
+// Shared overlay width for all install-flow dialogs so every window stays
+// the same size. Percentage of terminal width, with a floor so narrow
+// terminals remain usable.
+// ---------------------------------------------------------------------------
+export const DIALOG_WIDTH = 80;
+export const DIALOG_MIN_WIDTH = 80;
+
+// ---------------------------------------------------------------------------
 // borderBox — wrap arbitrary content in DynamicBorder / Text / Container
 // pieces.  The build functions return Container ready to be returned from
 // ctx.ui.custom's render.
@@ -62,6 +70,15 @@ export async function selectDialog<T>(
         tui.requestRender();
       },
     };
+  }, {
+    overlay: true,
+    overlayOptions: {
+      anchor: "center",
+      width: DIALOG_WIDTH,
+      minWidth: DIALOG_MIN_WIDTH,
+      maxHeight: Math.min(opts.items.length + 4, 16),
+      margin: 4,
+    },
   });
 }
 
@@ -116,6 +133,15 @@ export async function textInputDialog(
         }
       },
     };
+  }, {
+    overlay: true,
+    overlayOptions: {
+      anchor: "center",
+      width: DIALOG_WIDTH,
+      minWidth: DIALOG_MIN_WIDTH,
+      maxHeight: 8,
+      margin: 4,
+    },
   });
 }
 

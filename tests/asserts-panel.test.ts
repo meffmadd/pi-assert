@@ -164,7 +164,7 @@ describe("AssertsPanel", () => {
     );
   });
 
-  it("shows inactive section headers around the active anchor when space allows", () => {
+  it("always shows inactive section headers around the active anchor", () => {
     const panel = makePanel([
       makeAssert("above-1", "repo/aaa"),
       makeAssert("active-1", "repo/mid"),
@@ -218,6 +218,35 @@ describe("AssertsPanel", () => {
     assert.ok(
       !lines.some((l) => l.includes("below-0")),
       "does not render asserts of inactive sections",
+    );
+  });
+
+  it("shows adjacent section headers even when vertical space is tight", () => {
+    const panel = makePanel([
+      makeAssert("above-1", "repo/aaa"),
+      ...Array.from({ length: 10 }, (_, i) => makeAssert(`active-${i}`, "repo/mid")),
+      makeAssert("below-1", "repo/zzz"),
+    ]);
+
+    panel.nav.cross("down");
+
+    const lines = panel.render(80, 12);
+
+    assert.ok(
+      lines.some((l) => l.includes("repo/aaa")),
+      "shows header of section above even when tight",
+    );
+    assert.ok(
+      lines.some((l) => l.includes("repo/zzz")),
+      "shows header of section below even when tight",
+    );
+    assert.ok(
+      lines.some((l) => l.includes("active-0")),
+      "shows at least one active assert",
+    );
+    assert.ok(
+      lines.some((l) => l.includes("(1/10)")),
+      "shows scroll indicator because active section is windowed",
     );
   });
 
