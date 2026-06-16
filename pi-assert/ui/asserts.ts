@@ -53,43 +53,150 @@ export class AssertsPanel {
   }
 
   // ── Render ─────────────────────────────────────────────────────────
-  render(width: number): string[] {
+  render(width: number, terminalHeight?: number): string[] {
     if (this.groups.length === 0) {
-      return [this.theme.fg("dim", "No asserts defined.")];
+      return [
+        ...this.renderHeaderLines(),
+        this.theme.fg("dim", "No asserts defined."),
+      ];
     }
 
     if (this.confirm) {
       return [
+        ...this.renderHeaderLines(),
         "",
         `  Remove "${this.confirm.name}"? y/n`,
         "",
       ];
     }
 
+    if (terminalHeight === undefined) {
+      return this.renderUnbounded(width);
+    }
+
+    // Header (3 lines) and footer (2 lines) are reserved; the active
+    // section is the anchor, then we expand outward with whole inactive
+    // sections only when they fully fit.
+    const available = terminalHeight - 5;
+    const focusedSection = this.nav.focusedSection;
+    const activeGroup = this.groups[focusedSection];
+    const activeLen = activeGroup.asserts.length;
+
+    // Reserve one extra line for the scroll indicator when the active
+    // section is windowed.
+    const activeVisible =
+      activeLen < 4
+        ? activeLen
+        : Math.max(4, Math.min(activeLen, available - 2));
+    const windowed = activeVisible < activeLen;
+
+    const [start, end] = this.activeWindow(activeVisible);
+
+    let lines: string[] = [
+      this.renderSectionHeader(activeGroup, true),
+      ...this.renderSection(
+        width,
+        activeGroup,
+        true,
+        this.nav.focusedIndex,
+        start,
+        end,
+      ),
+    ];
+
+    if (windowed) {
+      lines.push(
+        this.theme.fg(
+          "dim",
+          `  (${this.nav.focusedIndex + 1}/${activeLen})`,
+        ),
+      );
+    }
+
+    let remaining = available - lines.length;
+    let above = focusedSection - 1;
+    let below = focusedSection + 1;
+
+    let progressed = true;
+    while (
+      remaining > 0 &&
+      (above >= 0 || below < this.groups.length) &&
+      progressed
+    ) {
+      progressed = false;
+      if (above >= 0) {
+        const block = this.renderInactiveSectionHeader(this.groups[above]);
+        if (block.length + 1 <= remaining) {
+          lines = [...block, "", ...lines];
+          remaining -= block.length + 1;
+          above--;
+          progressed = true;
+        }
+      }
+      if (below < this.groups.length) {
+        const block = this.renderInactiveSectionHeader(this.groups[below]);
+        if (block.length + 1 <= remaining) {
+          lines = [...lines, "", ...block];
+          remaining -= block.length + 1;
+          below++;
+          progressed = true;
+        }
+      }
+    }
+
+    const rendered = [
+      ...this.renderHeaderLines(),
+      ...lines,
+      "",
+      this.hintLine(),
+    ];
+
+    // If the terminal is too small for everything, keep the header by
+    // clipping from the bottom rather than letting the top scroll away.
+    if (terminalHeight !== undefined && rendered.length > terminalHeight) {
+      return rendered.slice(0, terminalHeight);
+    }
+
+    return rendered;
+  }
+
+  private renderUnbounded(width: number): string[] {
     const lines: string[] = [];
     for (let i = 0; i < this.groups.length; i++) {
       const g = this.groups[i];
       const isFocused = i === this.nav.focusedSection;
-      const headerColor = isFocused ? "accent" : "muted";
-      const header = g.source === "local" ? "Local" : g.source;
-      lines.push(`  ${this.theme.fg(headerColor, header)}`);
-
-      lines.push(
-        ...this.renderSection(width, g, isFocused, this.nav.focusedIndex),
-      );
+      lines.push(this.renderSectionHeader(g, isFocused));
+      lines.push(...this.renderSection(width, g, isFocused, this.nav.focusedIndex));
       if (i < this.groups.length - 1) lines.push("");
     }
+    return [...this.renderHeaderLines(), ...lines, "", this.hintLine()];
+  }
 
-    lines.push("", this.hintLine());
-    return lines;
+  private renderHeaderLines(): string[] {
+    return [
+      this.theme.fg("accent", this.theme.bold("Asserts")),
+      this.theme.fg(
+        "muted",
+        `${this.state.active.size}/${this.state.asserts.length} active`,
+      ),
+      "",
+    ];
   }
 
   // ── Render helpers ─────────────────────────────────────────────────
+  private renderSectionHeader(group: Group, focused: boolean): string {
+    const header = group.source === "local" ? "Local" : group.source;
+    const color = focused ? "accent" : "muted";
+    return `  ${this.theme.fg(color, header)}`;
+  }
+
   private renderSection(
     _width: number,
     group: Group,
     focused: boolean,
-    _selectedIndex: number,
+    selectedIndex: number,
+    start = 0,
+    end = group.asserts.length,
   ): string[] {
     if (!focused) {
       // Dimmed static listing
@@ -114,9 +221,10 @@ export class AssertsPanel {
     );
 
     const lines: string[] = [];
-    for (let i = 0; i < group.asserts.length; i++) {
+    for (let i = start; i < end; i++) {
       const a = group.asserts[i];
-      const selected = i === _selectedIndex;
+      if (!a) continue;
+      const selected = i === selectedIndex;
       const label = a.default ? `${a.name} (default)` : a.name;
       const status = this.state.active.has(a.name) ? "enabled" : "disabled";
       const padding = " ".repeat(Math.max(0, maxLabelWidth - label.length));
@@ -134,6 +242,32 @@ export class AssertsPanel {
       lines.push(`${prefix}${labelText}  ${valueText}`);
     }
     return lines;
+  }
+
+  private renderInactiveSectionHeader(group: Group): string[] {
+    return [this.renderSectionHeader(group, false)];
+  }
+
+  /** Return the [start, end) slice of the active section that stays visible. */
+  private activeWindow(visible: number): [number, number] {
+    const group = this.groups[this.nav.focusedSection];
+    const len = group.asserts.length;
+    if (visible >= len) return [0, len];
+
+    const selected = this.nav.focusedIndex;
+    const half = Math.floor((visible - 1) / 2);
+    let start = selected - half;
+    let end = start + visible;
+
+    if (start < 0) {
+      start = 0;
+      end = visible;
+    }
+    if (end > len) {
+      end = len;
+      start = len - visible;
+    }
+    return [start, end];
   }
 
   private hintLine(): string {
@@ -303,24 +437,9 @@ export function registerAssertsCommand(
             const panel = new AssertsPanel(state);
             panel.setTheme(theme);
 
-            const header = new (class {
-              render() {
-                return [
-                  theme.fg("accent", theme.bold("Asserts")),
-                  theme.fg(
-                    "muted",
-                    `${state.active.size}/${state.asserts.length} active`,
-                  ),
-                  "",
-                ];
-              }
-              invalidate() {}
-            })();
-
             const container = new Container();
-            container.addChild(header);
             container.addChild({
-              render: (w: number) => panel.render(w),
+              render: (w: number) => panel.render(w, tui.terminal.rows),
               invalidate: () => {},
               handleInput: () => {},
             });

@@ -112,4 +112,126 @@ describe("AssertsPanel", () => {
 
     assert.equal(highlighted, "[> ][short             ]  [disabled]");
   });
+
+  it("windows a long active section when terminal height is constrained", () => {
+    const panel = makePanel(
+      Array.from({ length: 8 }, (_, i) => makeAssert(`a-${i}`)),
+    );
+
+    const lines = panel.render(80, 12);
+    const activeHeader = lines.find((l) => l.includes("[Local]"));
+
+    assert.ok(activeHeader, "active section header is shown");
+    assert.equal(
+      lines.filter((l) => l.includes("a-")).length,
+      5,
+      "shows the minimum viable window of 5 asserts",
+    );
+    assert.ok(
+      lines.some((l) => l.includes("a-0")),
+      "selected assert stays visible",
+    );
+    assert.ok(
+      !lines.some((l) => l.includes("a-7")),
+      "asserts outside the window are hidden",
+    );
+    assert.ok(
+      lines.some((l) => l.includes("(1/8)")),
+      "shows scroll indicator",
+    );
+  });
+
+  it("centers the active window around the selected assert", () => {
+    const panel = makePanel(
+      Array.from({ length: 8 }, (_, i) => makeAssert(`a-${i}`)),
+    );
+
+    // Move selection to the 7th assert (index 6)
+    for (let i = 0; i < 6; i++) panel.nav.moveWithin("down");
+
+    const lines = panel.render(80, 12);
+    assert.ok(
+      lines.some((l) => l.includes("a-6")),
+      "selected assert a-6 is visible",
+    );
+    assert.ok(
+      !lines.some((l) => l.includes("a-0")),
+      "top asserts are scrolled out",
+    );
+    assert.ok(
+      lines.some((l) => l.includes("(7/8)")),
+      "scroll indicator follows selection",
+    );
+  });
+
+  it("shows inactive section headers around the active anchor when space allows", () => {
+    const panel = makePanel([
+      makeAssert("above-1", "repo/aaa"),
+      makeAssert("active-1", "repo/mid"),
+      makeAssert("active-2", "repo/mid"),
+      makeAssert("below-1", "repo/zzz"),
+    ]);
+
+    // Move focus from the first section down to the middle section.
+    panel.nav.cross("down");
+
+    const lines = panel.render(80, 17);
+
+    assert.ok(
+      lines.some((l) => l.includes("repo/aaa")),
+      "shows header of section above",
+    );
+    assert.ok(
+      lines.some((l) => l.includes("active-1")),
+      "shows active section asserts",
+    );
+    assert.ok(
+      lines.some((l) => l.includes("repo/zzz")),
+      "shows header of section below",
+    );
+    assert.ok(
+      !lines.some((l) => l.includes("above-1")),
+      "does not render asserts of inactive sections",
+    );
+    assert.ok(
+      !lines.some((l) => l.includes("below-1")),
+      "does not render asserts of inactive sections",
+    );
+  });
+
+  it("renders inactive section headers but not their asserts", () => {
+    const panel = makePanel([
+      ...Array.from({ length: 2 }, (_, i) => makeAssert(`active-${i}`)),
+      ...Array.from({ length: 5 }, (_, i) => makeAssert(`below-${i}`, "repo/below")),
+    ]);
+
+    const lines = panel.render(80, 14);
+
+    assert.ok(
+      lines.some((l) => l.includes("active-0")),
+      "shows active section asserts",
+    );
+    assert.ok(
+      lines.some((l) => l.includes("repo/below")),
+      "shows inactive section header",
+    );
+    assert.ok(
+      !lines.some((l) => l.includes("below-0")),
+      "does not render asserts of inactive sections",
+    );
+  });
+
+  it("always renders the Asserts header as the first line", () => {
+    const panel = makePanel(
+      Array.from({ length: 8 }, (_, i) => makeAssert(`a-${i}`)),
+    );
+
+    for (const h of [5, 8, 10, 12, 15, 20, undefined]) {
+      const lines = panel.render(80, h);
+      assert.ok(
+        lines[0]?.includes("Asserts"),
+        `first line should be header for terminalHeight=${String(h)}`,
+      );
+    }
+  });
 });
