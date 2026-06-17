@@ -11,6 +11,11 @@ import { DIALOG_MIN_WIDTH, DIALOG_WIDTH, SectionNavigator } from "./components.j
 import type { AssertsState } from "./state.js";
 import { runInstallWizard } from "./install.js";
 
+// Strip ANSI escape sequences so we can measure visible text width.
+function visibleLength(s: string): number {
+  return s.replace(/\x1b\[[0-9;]*m/g, "").length;
+}
+
 // ---------------------------------------------------------------------------
 // Group: an ordered list of asserts that share a `source`.
 // ---------------------------------------------------------------------------
@@ -75,10 +80,13 @@ export class AssertsPanel {
       return this.renderUnbounded(width);
     }
 
-    // Header (3 lines) and footer (2 lines) are reserved; the active
-    // section is the anchor. Adjacent section headers are always shown;
-    // remaining space is filled with active asserts, then farther sections.
-    const available = terminalHeight - 5;
+    // Header (3 lines) and footer (1 blank + hint line(s)) are reserved;
+    // the active section is the anchor. Adjacent section headers are always
+    // shown; remaining space is filled with active asserts, then farther
+    // sections.
+    const headerLines = this.renderHeaderLines();
+    const hintLines = this.hintLine(width);
+    const available = terminalHeight - headerLines.length - 1 - hintLines.length;
     const focusedSection = this.nav.focusedSection;
     const activeGroup = this.groups[focusedSection];
     const activeLen = activeGroup.asserts.length;
@@ -170,10 +178,10 @@ export class AssertsPanel {
     }
 
     const rendered = [
-      ...this.renderHeaderLines(),
+      ...headerLines,
       ...lines,
       "",
-      this.hintLine(),
+      ...hintLines,
     ];
 
     // If the terminal is too small for everything, keep the header by
@@ -194,7 +202,7 @@ export class AssertsPanel {
       lines.push(...this.renderSection(width, g, isFocused, this.nav.focusedIndex));
       if (i < this.groups.length - 1) lines.push("");
     }
-    return [...this.renderHeaderLines(), ...lines, "", this.hintLine()];
+    return [...this.renderHeaderLines(), ...lines, "", ...this.hintLine(width)];
   }
 
   private renderHeaderLines(): string[] {
@@ -295,18 +303,47 @@ export class AssertsPanel {
     return [start, end];
   }
 
-  private hintLine(): string {
+  private hintLine(width?: number): string[] {
     const dim = (s: string) => this.theme.fg("dim", s);
     const acc = (s: string) => this.theme.fg("accent", s);
     const focused = this.groups[this.nav.focusedSection];
-    const removeHint =
-      focused && focused.source !== "local" ? acc("d") + dim(" Remove · ") : "";
-    return (
-      dim("  Enter/Space enable · ") +
-      acc("t") + dim(" Toggle default · ") +
-      removeHint +
-      acc("i") + dim(" Install asserts · Esc to cancel")
-    );
+    const hasRemove = focused && focused.source !== "local";
+
+    const items: string[] = [
+      acc("Enter/Space") + dim(" enable"),
+      acc("t") + dim(" Toggle default"),
+    ];
+
+    if (hasRemove) {
+      items.push(acc("d") + dim(" Remove"));
+    }
+
+    items.push(acc("i") + dim(" Install asserts"));
+    items.push(acc("Esc") + dim(" to cancel"));
+
+    const indent = dim("  ");
+    const separator = dim(" · ");
+    const single = indent + items.join(separator);
+    if (width === undefined || visibleLength(single) <= width) {
+      return [single];
+    }
+
+    // Greedy wrap: pack as many whole items as fit on the first line,
+    // then place the remaining items on an indented second line.
+    let firstLength = visibleLength(indent + items[0]);
+    let breakIndex = 1;
+    while (breakIndex < items.length) {
+      const nextLength = visibleLength(separator + items[breakIndex]);
+      if (firstLength + nextLength > width) break;
+      firstLength += nextLength;
+      breakIndex++;
+    }
+    if (breakIndex === 0) breakIndex = 1;
+
+    return [
+      indent + items.slice(0, breakIndex).join(separator),
+      indent + items.slice(breakIndex).join(separator),
+    ];
   }
 
   // ── Theme access ───────────────────────────────────────────────────

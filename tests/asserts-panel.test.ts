@@ -124,8 +124,8 @@ describe("AssertsPanel", () => {
     assert.ok(activeHeader, "active section header is shown");
     assert.equal(
       lines.filter((l) => l.includes("a-")).length,
-      5,
-      "shows the minimum viable window of 5 asserts",
+      4,
+      "shows a windowed view of the asserts",
     );
     assert.ok(
       lines.some((l) => l.includes("a-0")),

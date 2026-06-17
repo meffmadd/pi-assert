@@ -12,8 +12,8 @@ import {
 
 // ---------------------------------------------------------------------------
 // Shared overlay width for all install-flow dialogs so every window stays
-// the same size. Percentage of terminal width, with a floor so narrow
-// terminals remain usable.
+// the same size. Fixed character width, with a matching floor so narrow
+// terminals still get a usable minimum.
 // ---------------------------------------------------------------------------
 export const DIALOG_WIDTH = 80;
 export const DIALOG_MIN_WIDTH = 80;
