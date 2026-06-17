@@ -16,6 +16,28 @@ function visibleLength(s: string): number {
   return s.replace(/\x1b\[[0-9;]*m/g, "").length;
 }
 
+// Wrap plain text at word boundaries (or hard boundaries when a single word
+// exceeds the allowed width). Preserves existing line breaks.
+function wrapText(text: string, width: number): string[] {
+  const lines: string[] = [];
+  for (const rawLine of text.split("\n")) {
+    let line = rawLine;
+    while (line.length > width) {
+      let breakAt = width;
+      const spaceIndex = line.lastIndexOf(" ", width);
+      if (spaceIndex > 0) {
+        breakAt = spaceIndex;
+      }
+      lines.push(line.slice(0, breakAt));
+      line = line.slice(breakAt).trimStart();
+    }
+    if (line.length > 0 || lines.length === 0) {
+      lines.push(line);
+    }
+  }
+  return lines;
+}
+
 // ---------------------------------------------------------------------------
 // Group: an ordered list of asserts that share a `source`.
 // ---------------------------------------------------------------------------
@@ -80,16 +102,23 @@ export class AssertsPanel {
       return this.renderUnbounded(width);
     }
 
-    // Header (3 lines) and footer (1 blank + hint line(s)) are reserved;
-    // the active section is the anchor. Adjacent section headers are always
-    // shown; remaining space is filled with active asserts, then farther
-    // sections.
+    // Header (3 lines) and footer (1 blank + hint line(s)) are reserved.
+    // The active section is the anchor; adjacent section headers are always
+    // shown. Detail lines for the selected assert are rendered inline
+    // directly below the highlighted assert row, so the active section's
+    // line budget includes both assert rows and the selected row's details.
     const headerLines = this.renderHeaderLines();
     const hintLines = this.hintLine(width);
-    const available = terminalHeight - headerLines.length - 1 - hintLines.length;
     const focusedSection = this.nav.focusedSection;
     const activeGroup = this.groups[focusedSection];
     const activeLen = activeGroup.asserts.length;
+    const selectedAssert = activeGroup.asserts[this.nav.focusedIndex];
+    const detailBlock = selectedAssert
+      ? this.renderDetail(width, selectedAssert)
+      : [];
+
+    const available =
+      terminalHeight - headerLines.length - 1 - hintLines.length;
 
     // Always reserve space for the previous/next section headers and the
     // separators between them and the active section.
@@ -100,16 +129,19 @@ export class AssertsPanel {
       (showPrev ? 2 : 0) + // prev header + separator
       (showNext ? 2 : 0); // next header + separator
 
-    let activeBudget = Math.max(1, available - reserved);
-    const windowed = activeLen > activeBudget;
+    const contentBudget = Math.max(1, available - reserved);
+    let activeVisible = Math.min(
+      activeLen,
+      Math.max(1, contentBudget - detailBlock.length),
+    );
+    const windowed = activeLen > activeVisible;
     if (windowed) {
-      activeBudget = Math.max(1, activeBudget - 1); // scroll indicator
+      activeVisible = Math.max(1, activeVisible - 1); // scroll indicator
     }
-    const activeVisible = Math.min(activeLen, activeBudget);
 
     const [start, end] = this.activeWindow(activeVisible);
 
-    let lines: string[] = [
+    let coreLines: string[] = [
       this.renderSectionHeader(activeGroup, true),
       ...this.renderSection(
         width,
@@ -122,7 +154,7 @@ export class AssertsPanel {
     ];
 
     if (windowed) {
-      lines.push(
+      coreLines.push(
         this.theme.fg(
           "dim",
           `  (${this.nav.focusedIndex + 1}/${activeLen})`,
@@ -132,19 +164,22 @@ export class AssertsPanel {
 
     // Always show the immediate previous and next section headers.
     if (showPrev) {
-      lines = [
+      coreLines = [
         this.renderSectionHeader(this.groups[focusedSection - 1], false),
         "",
-        ...lines,
+        ...coreLines,
       ];
     }
     if (showNext) {
-      lines = [
-        ...lines,
+      coreLines = [
+        ...coreLines,
         "",
         this.renderSectionHeader(this.groups[focusedSection + 1], false),
       ];
     }
+
+    // Add any farther sections that still fit.
+    let lines: string[] = [...coreLines];
 
     let remaining = available - lines.length;
     let above = focusedSection - (showPrev ? 2 : 1);
@@ -224,7 +259,7 @@ export class AssertsPanel {
   }
 
   private renderSection(
-    _width: number,
+    width: number,
     group: Group,
     focused: boolean,
     selectedIndex: number,
@@ -273,12 +308,60 @@ export class AssertsPanel {
         : this.theme.fg("dim", status);
 
       lines.push(`${prefix}${labelText}  ${valueText}`);
+
+      if (selected) {
+        lines.push(...this.renderDetail(width, a));
+      }
     }
     return lines;
   }
 
   private renderInactiveSectionHeader(group: Group): string[] {
     return [this.renderSectionHeader(group, false)];
+  }
+
+  /** Render the shell/when detail panel for the highlighted assert. */
+  private renderDetail(width: number, assert: Assert): string[] {
+    const dim = (s: string) => this.theme.fg("dim", s);
+    const muted = (s: string) => this.theme.fg("muted", s);
+
+    const indent = 4;
+    const shellLabel = "shell: ";
+    const whenLabel = "when: ";
+
+    const lines: string[] = [];
+
+    const shellWidth = Math.max(1, width - indent - shellLabel.length);
+    const shellLines = wrapText(assert.shell, shellWidth);
+    for (let i = 0; i < shellLines.length; i++) {
+      if (i === 0) {
+        lines.push(
+          " ".repeat(indent) + dim(shellLabel) + muted(shellLines[i]),
+        );
+      } else {
+        lines.push(
+          " ".repeat(indent + shellLabel.length) + muted(shellLines[i]),
+        );
+      }
+    }
+
+    if (assert.when) {
+      const whenWidth = Math.max(1, width - indent - whenLabel.length);
+      const whenLines = wrapText(assert.when, whenWidth);
+      for (let i = 0; i < whenLines.length; i++) {
+        if (i === 0) {
+          lines.push(
+            " ".repeat(indent) + dim(whenLabel) + muted(whenLines[i]),
+          );
+        } else {
+          lines.push(
+            " ".repeat(indent + whenLabel.length) + muted(whenLines[i]),
+          );
+        }
+      }
+    }
+
+    return lines;
   }
 
   /** Return the [start, end) slice of the active section that stays visible. */

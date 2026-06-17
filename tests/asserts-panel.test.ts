@@ -21,12 +21,18 @@ function mockTheme(): Theme {
   } as unknown as Theme;
 }
 
-function makeAssert(name: string, source = "local", isDefault = false): Assert {
+function makeAssert(
+  name: string,
+  source = "local",
+  isDefault = false,
+  opts: { shell?: string; when?: string } = {},
+): Assert {
   return {
     name,
     source,
     hook: "tool_call",
-    shell: "true",
+    shell: opts.shell ?? "true",
+    when: opts.when,
     default: isDefault,
     path: `/tmp/${name}.json`,
   };
@@ -124,7 +130,7 @@ describe("AssertsPanel", () => {
     assert.ok(activeHeader, "active section header is shown");
     assert.equal(
       lines.filter((l) => l.includes("a-")).length,
-      4,
+      3,
       "shows a windowed view of the asserts",
     );
     assert.ok(
@@ -262,5 +268,87 @@ describe("AssertsPanel", () => {
         `first line should be header for terminalHeight=${String(h)}`,
       );
     }
+  });
+
+  it("renders the selected assert's shell command in the detail panel", () => {
+    const panel = makePanel([
+      makeAssert("alpha", "local", false, { shell: "echo hello" }),
+      makeAssert("beta"),
+    ]);
+
+    const lines = panel.render(80);
+    assert.ok(
+      lines.some((l) => l.includes("shell:") && l.includes("echo hello")),
+      "shows the shell command for the highlighted assert",
+    );
+  });
+
+  it("renders the when precondition when present", () => {
+    const panel = makePanel([
+      makeAssert("alpha", "local", false, {
+        shell: "echo hello",
+        when: "test -f ./flag",
+      }),
+    ]);
+
+    const lines = panel.render(80);
+    assert.ok(
+      lines.some((l) => l.includes("when:") && l.includes("test -f ./flag")),
+      "shows the when precondition",
+    );
+  });
+
+  it("omits the when line when the assert has no when precondition", () => {
+    const panel = makePanel([
+      makeAssert("alpha", "local", false, { shell: "echo hello" }),
+    ]);
+
+    const lines = panel.render(80);
+    assert.ok(
+      !lines.some((l) => l.includes("when:")),
+      "does not show a when line when absent",
+    );
+  });
+
+  it("wraps long shell commands in the detail panel", () => {
+    const longShell =
+      "echo one two three four five six seven eight nine ten eleven twelve";
+    const panel = makePanel([
+      makeAssert("alpha", "local", false, { shell: longShell }),
+    ]);
+
+    const lines = panel.render(40);
+    assert.ok(
+      lines.some((l) => l.includes("shell:") && l.includes("echo")),
+      "first detail line shows the shell label",
+    );
+    assert.ok(
+      lines.some((l) => !l.includes("shell:") && l.includes("twelve")),
+      "wrapped continuation line appears",
+    );
+  });
+
+  it("updates the detail panel when the selection moves", () => {
+    const panel = makePanel([
+      makeAssert("alpha", "local", false, { shell: "echo alpha" }),
+      makeAssert("beta", "local", false, { shell: "echo beta" }),
+    ]);
+
+    let lines = panel.render(80);
+    assert.ok(
+      lines.some((l) => l.includes("echo alpha")),
+      "initial detail shows alpha's shell",
+    );
+    assert.ok(
+      !lines.some((l) => l.includes("echo beta")),
+      "beta's shell is not shown yet",
+    );
+
+    panel.nav.moveWithin("down");
+    lines = panel.render(80);
+    assert.ok(
+      lines.some((l) => l.includes("echo beta")),
+      "detail updates to beta's shell after moving down",
+    );
   });
 });
