@@ -180,19 +180,28 @@ function installAndReload(
   name: string,
   entry: RuleEntry,
 ): void {
+  let overwritten: boolean;
   try {
-    installRule(ctx.cwd, repo, name, entry);
-    state.load(ctx.cwd);
-    state.restore(ctx);
-    state.updateStatus(ctx);
-    ctx.ui.notify(
-      `pi-assert: installed "${name}". Use /asserts to enable it.`,
-      "info",
-    );
+    overwritten = installRule(ctx.cwd, repo, name, entry);
   } catch (err) {
     ctx.ui.notify(
       `pi-assert: failed to install "${name}" — ${String(err)}`,
       "error",
+    );
+    return;
+  }
+
+  state.load(ctx.cwd);
+  state.restore(ctx);
+  state.updateStatus(ctx);
+  ctx.ui.notify(
+    `pi-assert: installed "${name}". Use /asserts to enable it.`,
+    "info",
+  );
+  if (overwritten) {
+    ctx.ui.notify(
+      `pi-assert: overwrote existing assert "${name}" in "${repo}".`,
+      "warning",
     );
   }
 }

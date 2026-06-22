@@ -69,24 +69,53 @@ function mockFileResponse(
   };
 }
 
-/** Real API response shape for a directory listing item. */
-function mockDirItem(name: string, path: string, type = "file"): unknown {
+/** Real API response shape for a Git Trees API blob entry. */
+function mockTreeBlob(path: string, sha = "abc123"): unknown {
   return {
-    name,
     path,
-    sha: "abc123",
+    mode: "100644",
+    type: "blob",
+    sha,
     size: 100,
-    url: `https://api.github.com/repos/meffmadd/pi-assert-rules/contents/${path}?ref=main`,
-    html_url: `https://github.com/meffmadd/pi-assert-rules/blob/main/${path}`,
-    git_url: `https://api.github.com/repos/meffmadd/pi-assert-rules/git/blobs/abc123`,
-    download_url: `https://raw.githubusercontent.com/meffmadd/pi-assert-rules/main/${path}`,
-    type,
-    _links: {
-      self: `https://api.github.com/repos/meffmadd/pi-assert-rules/contents/${path}?ref=main`,
-      git: `https://api.github.com/repos/meffmadd/pi-assert-rules/git/blobs/abc123`,
-      html: `https://github.com/meffmadd/pi-assert-rules/blob/main/${path}`,
-    },
+    url: `https://api.github.com/repos/meffmadd/pi-assert-rules/git/blobs/${sha}`,
   };
+}
+
+/** Real API response shape for a Git Trees API tree (directory) entry. */
+function mockTreeDir(path: string, sha = "dir-sha"): unknown {
+  return {
+    path,
+    mode: "040000",
+    type: "tree",
+    sha,
+    url: `https://api.github.com/repos/meffmadd/pi-assert-rules/git/trees/${sha}`,
+  };
+}
+
+/**
+ * Mock `globalThis.fetch` to serve a single recursive-trees response.
+ * `fetchRuleFiles` now does one call (branch name passed directly as
+ * the tree SHA), so routing is by URL substring.
+ */
+function mockTreesFetch(
+  tree: unknown[],
+  opts: {
+    truncated?: boolean;
+    status?: number;
+  } = {},
+): void {
+  mock.method(globalThis, "fetch", (url: string) => {
+    if (url.includes("/git/trees/")) {
+      if (opts.status) return mockJsonResponse({}, opts.status);
+      return mockJsonResponse({
+        sha: "tree-sha",
+        url,
+        tree,
+        truncated: opts.truncated ?? false,
+      });
+    }
+    throw new Error(`unexpected fetch url: ${url}`);
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -94,14 +123,14 @@ function mockDirItem(name: string, path: string, type = "file"): unknown {
 // ═══════════════════════════════════════════════════════════════════
 
 describe("fetchRuleFiles", () => {
-  type PassCase = { label: string; items: unknown[]; expected: RuleFile[] };
+  type PassCase = { label: string; tree: unknown[]; expected: RuleFile[] };
 
   const passCases: PassCase[] = [
     {
-      label: "returns only .json files and strips extension",
-      items: [
-        mockDirItem("defaults.json", "rules/defaults.json"),
-        mockDirItem("security.json", "rules/security.json"),
+      label: "returns only .json blobs under rules/ and strips rules/ prefix + .json",
+      tree: [
+        mockTreeBlob("rules/defaults.json"),
+        mockTreeBlob("rules/security.json"),
       ],
       expected: [
         { name: "defaults", path: "rules/defaults.json", sha: "abc123" },
@@ -109,31 +138,61 @@ describe("fetchRuleFiles", () => {
       ],
     },
     {
-      label: "filters out non-.json files",
-      items: [
-        mockDirItem("defaults.json", "rules/defaults.json"),
-        mockDirItem("README.md", "rules/README.md"),
+      label: "filters out non-.json files under rules/",
+      tree: [
+        mockTreeBlob("rules/defaults.json"),
+        mockTreeBlob("rules/README.md"),
       ],
       expected: [{ name: "defaults", path: "rules/defaults.json", sha: "abc123" }],
     },
     {
-      label: "filters out directories",
-      items: [
-        mockDirItem("defaults.json", "rules/defaults.json"),
-        mockDirItem("subdir", "rules/subdir", "dir"),
+      label: "filters out tree (directory) entries",
+      tree: [
+        mockTreeBlob("rules/defaults.json"),
+        mockTreeDir("rules/subdir"),
       ],
       expected: [{ name: "defaults", path: "rules/defaults.json", sha: "abc123" }],
     },
     {
-      label: "returns [] for empty rules/ directory",
-      items: [],
+      label: "filters out files outside rules/ (tree is repo-wide)",
+      tree: [
+        mockTreeBlob("rules/defaults.json"),
+        mockTreeBlob("README.md"),
+        mockTreeBlob("src/index.ts"),
+      ],
+      expected: [{ name: "defaults", path: "rules/defaults.json", sha: "abc123" }],
+    },
+    {
+      label: "returns [] for empty tree",
+      tree: [],
       expected: [],
+    },
+    {
+      label: "nested subdirectories: strips rules/ prefix, preserves intermediate dirs in name",
+      tree: [
+        mockTreeBlob("rules/defaults.json"),
+        mockTreeBlob("rules/security/writes.json"),
+        mockTreeBlob("rules/security/reads.json"),
+        mockTreeBlob("rules/git/no-force-push.json"),
+        mockTreeBlob("rules/experimental/drafts/trial.json"),
+        // dir entries and non-rules files are present too, to confirm they're dropped
+        mockTreeDir("rules/security"),
+        mockTreeDir("rules/git"),
+        mockTreeBlob("package.json"),
+      ],
+      expected: [
+        { name: "defaults", path: "rules/defaults.json", sha: "abc123" },
+        { name: "experimental/drafts/trial", path: "rules/experimental/drafts/trial.json", sha: "abc123" },
+        { name: "git/no-force-push", path: "rules/git/no-force-push.json", sha: "abc123" },
+        { name: "security/reads", path: "rules/security/reads.json", sha: "abc123" },
+        { name: "security/writes", path: "rules/security/writes.json", sha: "abc123" },
+      ],
     },
   ];
 
-  for (const { label, items, expected } of passCases) {
+  for (const { label, tree, expected } of passCases) {
     it(label, async () => {
-      mock.method(globalThis, "fetch", () => mockJsonResponse(items));
+      mockTreesFetch(tree);
       assert.deepStrictEqual(
         await fetchRuleFiles("meffmadd/pi-assert-rules"),
         expected,
@@ -143,16 +202,32 @@ describe("fetchRuleFiles", () => {
 
   // ── Throws cases ────────────────────────────────────────────────
 
-  type ThrowsCase = { label: string; body: unknown; status: number; errorPattern: RegExp };
+  type ThrowsCase = {
+    label: string;
+    tree?: unknown[];
+    status?: number;
+    truncated?: boolean;
+    errorPattern: RegExp;
+  };
 
   const throwsCases: ThrowsCase[] = [
-    { label: "throws on 404", body: {}, status: 404, errorPattern: /404/ },
-    { label: "throws on 403", body: {}, status: 403, errorPattern: /403/ },
+    {
+      label: "throws on 404 from trees",
+      tree: [],
+      status: 404,
+      errorPattern: /404/,
+    },
+    {
+      label: "throws when tree is truncated (too many entries)",
+      tree: [mockTreeBlob("rules/a.json")],
+      truncated: true,
+      errorPattern: /truncated/i,
+    },
   ];
 
-  for (const { label, body, status, errorPattern } of throwsCases) {
+  for (const { label, tree, status, truncated, errorPattern } of throwsCases) {
     it(label, async () => {
-      mock.method(globalThis, "fetch", () => mockJsonResponse(body, status));
+      mockTreesFetch(tree ?? [], { status, truncated });
       await assert.rejects(
         () => fetchRuleFiles("meffmadd/pi-assert-rules"),
         errorPattern,
@@ -170,6 +245,30 @@ describe("fetchRuleFiles", () => {
       () => fetchRuleFiles("meffmadd/pi-assert-rules"),
       /ECONNREFUSED/,
     );
+  });
+
+  // ── URL shape & ref normalisation ───────────────────────────────
+
+  it("calls git/trees/{branch}?recursive=1 directly (no ref-resolve hop)", async () => {
+    const calls: string[] = [];
+    mock.method(globalThis, "fetch", (url: string) => {
+      calls.push(url);
+      return mockJsonResponse({ tree: [], truncated: false });
+    });
+    await fetchRuleFiles("meffmadd/pi-assert-rules", "develop");
+    assert.strictEqual(calls.length, 1, "exactly one fetch call");
+    assert.match(calls[0]!, /\/git\/trees\/develop\?recursive=1$/, calls[0]!);
+  });
+
+  it("strips a refs/heads/ prefix from the ref before calling git/trees/", async () => {
+    const calls: string[] = [];
+    mock.method(globalThis, "fetch", (url: string) => {
+      calls.push(url);
+      return mockJsonResponse({ tree: [], truncated: false });
+    });
+    await fetchRuleFiles("meffmadd/pi-assert-rules", "refs/heads/main");
+    assert.match(calls[0]!, /\/git\/trees\/main\?recursive=1$/, calls[0]!);
+    assert.doesNotMatch(calls[0]!, /refs\/heads\/refs\/heads/);
   });
 });
 
@@ -266,6 +365,42 @@ describe("fetchRuleFile", () => {
       );
     });
   }
+
+  // ── Nested-path & URL encoding (per-segment, slashes preserved) ─
+
+  it("fetches a nested path with per-segment URL encoding (slashes preserved)", async () => {
+    const calls: string[] = [];
+    const content = { x: { description: "d", hook: "tool_call", shell: "true" } };
+    mock.method(globalThis, "fetch", (url: string) => {
+      calls.push(url);
+      return mockJsonResponse(
+        mockFileResponse("writes.json", "rules/security/writes.json", content),
+      );
+    });
+    const result = await fetchRuleFile(
+      "meffmadd/pi-assert-rules",
+      "rules/security/writes.json",
+    );
+    assert.ok(calls[0], "fetch was called");
+    // Slashes must be preserved in the contents path.
+    assert.match(calls[0]!, /\/contents\/rules\/security\/writes\.json/, calls[0]!);
+    assert.doesNotMatch(calls[0]!, /%2F/, `slash must not be encoded: ${calls[0]}`);
+    assert.deepStrictEqual(result, content);
+  });
+
+  it("encodes special characters within a single path segment", async () => {
+    const calls: string[] = [];
+    const content = { x: { description: "d", hook: "tool_call", shell: "true" } };
+    mock.method(globalThis, "fetch", (url: string) => {
+      calls.push(url);
+      return mockJsonResponse(
+        mockFileResponse("my rules.json", "rules/my rules/x.json", content),
+      );
+    });
+    await fetchRuleFile("meffmadd/pi-assert-rules", "rules/my rules/x.json");
+    // Space within a segment is encoded, slashes between segments are not.
+    assert.match(calls[0]!, /\/contents\/rules\/my%20rules\/x\.json/, calls[0]!);
+  });
 
   // ── Throws cases ────────────────────────────────────────────────
 

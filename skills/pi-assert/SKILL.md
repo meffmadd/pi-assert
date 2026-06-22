@@ -89,6 +89,38 @@ VS Code and other editors will then provide:
 3. Specify the `hook`, optional `filter`, and a `shell` command.
 4. Reload pi with `/reload` (or restart).
 
+## Installing Asserts from a Rules Repo
+
+Run `/asserts` and choose **install** to browse a rules repo (default
+`meffmadd/pi-assert-rules`) and install individual asserts into your
+project's `.pi/asserts.json`. The repo's `rules/` directory holds `.json`
+files, each a map of assert names to `RuleEntry` objects (with a
+`description` field that the installer strips on install).
+
+**Nested directories.** Rule files may be organised into subdirectories
+under `rules/`, arbitrarily deep:
+
+```
+rules/
+  defaults.json
+  security/
+    writes.json
+    reads.json
+  git/no-force-push.json
+```
+
+The picker lists every `.json` file flat, sorted by path, with the
+intermediate directories shown in the label (`security/writes`).
+Nesting is purely a remote organisational concern — each installed
+assert lands in the flat `owner/repo` section of your `.pi/asserts.json`
+keyed by the assert's own `name`, exactly as a flat-layout install would.
+
+**Name uniqueness across the repo.** Assert names must be unique within
+a file, and *should* be unique across the whole repo. Two files that
+define an assert with the same `name` will overwrite each other on
+install (last install wins); the installer shows a warning notification
+when an install overwrites an existing assert.
+
 ## Common Patterns
 
 ### Conditional asserts with `when` (skip expensive checks)
@@ -266,6 +298,7 @@ Multiple agent-end asserts batch into a single message:
 6. A block shows an error notification in the TUI.
 7. The `false` Unix command always exits 1 — use it for unconditional blocks.
 8. If either `asserts.json` fails to parse, pi-assert shows an error notification naming the file and the parse error, **no asserts are loaded**, and the status bar shows `pi-assert: config error (N files)` until the file is fixed. This is a hard-fail — a broken config blocks all asserts, even from a working sibling file.
+9. Installing an assert that overwrites an existing one in the same repo section shows a warning notification; the install still succeeds (last install wins).
 
 ## Toggling `default` from the UI
 

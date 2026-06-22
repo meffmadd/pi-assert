@@ -20,13 +20,18 @@ export interface RuleEntry {
 /** Top-level shape of a rules/*.json file. */
 export type RuleEntries = Record<string, RuleEntry>;
 
-/** A file listed by the GitHub contents API. */
+/** A `.json` rule file under `rules/` in a pi-assert-rules repo. */
 export interface RuleFile {
-  /** Filename without .json extension (e.g. "defaults"). */
+  /**
+   * Relative path under `rules/` without the `.json` extension.
+   * Flat files keep a bare name ("defaults"); nested files keep the
+   * intermediate directories ("security/writes", "git/no-force-push").
+   * Used as the picker label and the assert-entry title.
+   */
   name: string;
-  /** Full path within the repo (e.g. "rules/defaults.json"). */
+  /** Full path within the repo (e.g. "rules/security/writes.json"). */
   path: string;
-  /** Git blob SHA (for future version tracking). */
+  /** Git blob SHA from the tree (for future version tracking). */
   sha: string;
 }
 
@@ -37,39 +42,64 @@ export interface RuleFile {
 const API_BASE = "https://api.github.com";
 
 /**
- * List `.json` files under `rules/` in a GitHub repo.
+ * List `.json` rule files under `rules/` in a GitHub repo, recursively.
  *
- * Returns only regular files ending in `.json` (directories and other
- * file types are filtered out).  The `name` field has the `.json` extension
- * stripped (e.g. "defaults").
+ * Uses the Git Trees API with `recursive=1` so a single round trip
+ * enumerates the whole tree regardless of nesting depth.  The Contents
+ * API only lists immediate children, so it can't see subdirectories.
+ *
+ * GitHub accepts a branch name directly as the tree SHA (it resolves
+ * the ref server-side), so no separate ref-resolve hop is needed.
+ * A leading `refs/heads/` is stripped if present so callers can pass
+ * either a bare branch ("main") or a full ref ("refs/heads/main").
+ *
+ * Returns blobs whose path starts with `rules/` and ends in `.json`,
+ * sorted by path.  The `name` field is the path relative to `rules/`
+ * with the `.json` extension stripped, so nested files keep their
+ * intermediate directories (e.g. "security/writes").
+ *
+ * Throws loudly if the tree response is `truncated` (the repo has more
+ * than ~1000 entries) rather than silently returning a partial list —
+ * a rules repo should never hit this, and a partial drop would be a
+ * silent-failure bug of exactly the kind this function exists to avoid.
  */
 export async function fetchRuleFiles(
   repo: string,
   ref = "main",
 ): Promise<RuleFile[]> {
-  const url = `${API_BASE}/repos/${repo}/contents/rules?ref=${ref}`;
+  const branch = ref.replace(/^refs\/heads\//, "");
+  const url = `${API_BASE}/repos/${repo}/git/trees/${branch}?recursive=1`;
   const res = await fetch(url);
 
   if (!res.ok) {
     throw new Error(`GitHub API returned ${res.status} for ${url}`);
   }
 
-  const items = (await res.json()) as Array<{
-    name: string;
-    path: string;
-    sha: string;
-    type: string;
-  }>;
+  const body = (await res.json()) as {
+    tree: Array<{ path: string; type: string; sha: string }>;
+    truncated?: boolean;
+  };
 
-  return items
+  if (body.truncated) {
+    throw new Error(
+      `Rule tree for ${repo} is too large for a single API response ` +
+        `(truncated). Reorganise so rules/ has fewer than ~1000 files.`,
+    );
+  }
+
+  return body.tree
     .filter(
-      (item) => item.type === "file" && item.name.endsWith(".json"),
+      (item) =>
+        item.type === "blob" &&
+        item.path.startsWith("rules/") &&
+        item.path.endsWith(".json"),
     )
     .map((item) => ({
-      name: item.name.replace(/\.json$/, ""),
+      name: item.path.slice("rules/".length).replace(/\.json$/, ""),
       path: item.path,
       sha: item.sha,
-    }));
+    }))
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
 /**
@@ -82,7 +112,12 @@ export async function fetchRuleFile(
   path: string,
   ref = "main",
 ): Promise<RuleEntries> {
-  const url = `${API_BASE}/repos/${repo}/contents/${encodeURIComponent(path)}?ref=${ref}`;
+  // Encode each path segment separately so slashes are preserved —
+  // `encodeURIComponent(path)` would turn "rules/security/writes.json"
+  // into "rules%2Fsecurity%2Fwrites.json", which the Contents API does
+  // not reliably accept for nested paths.
+  const urlPath = path.split("/").map(encodeURIComponent).join("/");
+  const url = `${API_BASE}/repos/${repo}/contents/${urlPath}?ref=${ref}`;
   const res = await fetch(url);
 
   if (!res.ok) {
@@ -195,13 +230,17 @@ function writeFile(cwd: string, data: SectionedFile): void {
  * under the given `repo` key (e.g. "meffmadd/pi-assert-rules").
  *
  * Strips the `description` field — only schema-valid fields are persisted.
+ *
+ * Returns `true` if an existing assert with the same `name` was
+ * overwritten, `false` for a fresh install.  Callers with UI access
+ * can surface the overwrite as a warning notification.
  */
 export function installRule(
   cwd: string,
   repo: string,
   name: string,
   entry: RuleEntry,
-): void {
+): boolean {
   const current = readFile(cwd);
 
   // Ensure repo is in the repos array
@@ -225,15 +264,13 @@ export function installRule(
   if (entry.when !== undefined) clean.when = entry.when;
   if (entry.default !== undefined) clean.default = entry.default;
 
-  // Warn if overwriting
-  if (section[name] !== undefined) {
-    console.warn(
-      `pi-assert: overwriting existing assert "${name}" in "${repo}"`,
-    );
-  }
+  // Warn if overwriting — surfaced by callers via a TUI notification
+  // (console.warn is invisible in the TUI).
+  const overwritten = section[name] !== undefined;
 
   section[name] = clean;
   writeFile(cwd, current);
+  return overwritten;
 }
 
 /**
