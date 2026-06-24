@@ -13,7 +13,16 @@ import {
   type RuleEntry,
   type RuleFile,
 } from "../installer.js";
-import { selectDialog, textInputDialog } from "./components.js";
+import {
+  HINT_ENTER_CONFIRM,
+  HINT_ENTER_INSTALL,
+  HINT_ENTER_OPEN,
+  HINT_ENTER_SELECT,
+  HINT_ESC_BACK,
+  HINT_ESC_CANCEL,
+  selectDialog,
+  textInputDialog,
+} from "./components.js";
 import type { AssertsState } from "./state.js";
 
 // ---------------------------------------------------------------------------
@@ -25,14 +34,10 @@ async function promptRepoChoice(
   ctx: ExtensionContext,
   repos: string[],
 ): Promise<string | null> {
-  const hint =
-    repos.length === 0
-      ? "enter add repo • esc cancel"
-      : "↑↓ navigate • enter select • esc cancel";
   return selectDialog<string>(ctx, {
     title: "Repos",
     items: buildRepoPickerItems(repos),
-    hint,
+    hint: [HINT_ENTER_SELECT, HINT_ESC_CANCEL],
   });
 }
 
@@ -44,7 +49,7 @@ async function promptNewRepo(
   return textInputDialog(ctx, {
     title: "Add repo",
     label: "Enter owner/repo:",
-    hint: "enter confirm • esc back",
+    hint: [HINT_ENTER_CONFIRM, HINT_ESC_BACK],
     initial,
   });
 }
@@ -89,7 +94,7 @@ async function promptRuleFile(
   const chosen = await selectDialog<string>(ctx, {
     title: `Rule Files (${repo})`,
     items,
-    hint: "↑↓ navigate • enter open • esc cancel",
+    hint: [HINT_ENTER_OPEN, HINT_ESC_CANCEL],
   });
   if (!chosen) return null;
   return files.find((f) => f.path === chosen) ?? null;
@@ -138,7 +143,7 @@ async function promptAssertEntry(
   return selectDialog<string>(ctx, {
     title: fileName,
     items,
-    hint: "↑↓ navigate • enter install • esc back",
+    hint: [HINT_ENTER_INSTALL, HINT_ESC_CANCEL],
     detailFor: (value) => {
       const e = entries[value];
       if (!e) return undefined;

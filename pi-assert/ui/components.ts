@@ -69,6 +69,90 @@ export function renderAssertDetail(
 }
 
 // ---------------------------------------------------------------------------
+// Shared hint-line format
+//
+// Every panel and dialog uses the same style: `key` segments in accent and
+// `action` segments in dim, joined by ` · ` with a 2-space indent.  The
+// segment constants below keep the vocabulary consistent; `renderHintLine`
+// and the `HintLine` component are the single place that handles greedy,
+// whole-item wrapping when the line is too long.
+// ---------------------------------------------------------------------------
+export const HINT_ENTER_SELECT: [string, string] = ["Enter", "select"];
+export const HINT_ENTER_OPEN: [string, string] = ["Enter", "open"];
+export const HINT_ENTER_INSTALL: [string, string] = ["Enter", "install"];
+export const HINT_ENTER_CONFIRM: [string, string] = ["Enter", "confirm"];
+export const HINT_ENTER_SPACE_ENABLE: [string, string] = ["Enter/Space", "enable"];
+export const HINT_ESC_CANCEL: [string, string] = ["Esc", "to cancel"];
+export const HINT_ESC_BACK: [string, string] = ["Esc", "back"];
+export const HINT_T_TOGGLE_DEFAULT: [string, string] = ["t", "Toggle default"];
+export const HINT_D_REMOVE: [string, string] = ["d", "Remove"];
+export const HINT_I_INSTALL_ASSERTS: [string, string] = ["i", "Install asserts"];
+
+/** Format a single `[key, action]` segment (no indent/separator). */
+export function formatHintItem(theme: Theme, item: [string, string]): string {
+  return theme.fg("accent", item[0]) + theme.fg("dim", " " + item[1]);
+}
+
+/** Format the full hint line from `[key, action]` segments. */
+export function formatHint(theme: Theme, items: [string, string][]): string {
+  const dim = (s: string) => theme.fg("dim", s);
+  const indent = dim("  ");
+  const separator = dim(" · ");
+  return indent + items.map((i) => formatHintItem(theme, i)).join(separator);
+}
+
+/**
+ * Render a hint line that wraps greedily at whole segments when it would
+ * exceed `width`.  Returns one or two lines so long hints never break a key
+ * away from its description.
+ */
+export function renderHintLine(
+  theme: Theme,
+  width: number | undefined,
+  items: [string, string][],
+): string[] {
+  const single = formatHint(theme, items);
+  if (width === undefined || visibleWidth(single) <= width) {
+    return [single];
+  }
+
+  const dim = (s: string) => theme.fg("dim", s);
+  const indent = dim("  ");
+  const separator = dim(" · ");
+
+  let firstLength = visibleWidth(indent + formatHintItem(theme, items[0]!));
+  let breakIndex = 1;
+  while (breakIndex < items.length) {
+    const nextLength = visibleWidth(
+      separator + formatHintItem(theme, items[breakIndex]!),
+    );
+    if (firstLength + nextLength > width) break;
+    firstLength += nextLength;
+    breakIndex++;
+  }
+  if (breakIndex === 0) breakIndex = 1;
+
+  return [
+    formatHint(theme, items.slice(0, breakIndex)),
+    formatHint(theme, items.slice(breakIndex)),
+  ];
+}
+
+/** Component wrapper around `renderHintLine` that receives the dialog width. */
+export class HintLine implements Component {
+  constructor(
+    private theme: Theme,
+    private items: [string, string][],
+  ) {}
+
+  render(width: number): string[] {
+    return renderHintLine(this.theme, width, this.items);
+  }
+
+  invalidate() {}
+}
+
+// ---------------------------------------------------------------------------
 // Shared overlay width for all install-flow dialogs so every window stays
 // the same size. Fixed character width, with a matching floor so narrow
 // terminals still get a usable minimum.
@@ -104,9 +188,10 @@ export interface DialogShellOptions {
   title: string;
   /** Body component rendered between the title border and the hint. */
   body: Component;
-  hint?: string;
-  /** Default hint when the caller omits one. */
-  defaultHint?: string;
+  /** Hint segments as `[key, action]` pairs, rendered via `HintLine`. */
+  hint?: [string, string][];
+  /** Default hint segments when the caller omits one. */
+  defaultHint?: [string, string][];
   maxHeight: number;
 }
 
@@ -120,10 +205,9 @@ function dialogShell(
 } {
   const container = titledBox(theme, opts.title, [
     opts.body,
-    new Text(
-      theme.fg("dim", opts.hint ?? opts.defaultHint ?? "↑↓ navigate • enter select • esc cancel"),
-      1,
-      0,
+    new HintLine(
+      theme,
+      opts.hint ?? opts.defaultHint ?? [HINT_ENTER_SELECT, HINT_ESC_CANCEL],
     ),
   ]);
 
@@ -163,7 +247,8 @@ export async function selectDialog<T>(
   opts: {
     title: string;
     items: SelectItem[];
-    hint?: string;
+    /** Hint segments as `[key, action]` pairs, rendered via `formatHint`. */
+    hint?: [string, string][];
     maxVisible?: number;
     /** Resolve the shell/when preview for a given item value. */
     detailFor?: (value: string) => { shell: string; when?: string } | undefined;
@@ -369,7 +454,13 @@ export class DetailList<T = SelectItem> implements Component {
 // ---------------------------------------------------------------------------
 export async function textInputDialog(
   ctx: ExtensionContext,
-  opts: { title: string; label: string; hint?: string; initial?: string },
+  opts: {
+    title: string;
+    label: string;
+    /** Hint segments as `[key, action]` pairs, rendered via `formatHint`. */
+    hint?: [string, string][];
+    initial?: string;
+  },
 ): Promise<string | null> {
   const maxHeight = 8;
 
@@ -393,7 +484,10 @@ export async function textInputDialog(
       title: opts.title,
       body,
       hint: opts.hint,
-      defaultHint: "enter confirm • esc cancel",
+      defaultHint: [
+        ["enter", "confirm"],
+        ["esc", "cancel"],
+      ],
       maxHeight,
     });
 

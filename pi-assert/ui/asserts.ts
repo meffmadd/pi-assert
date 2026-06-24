@@ -11,9 +11,15 @@ import { removeRule, setAssertDefault } from "../installer.js";
 import {
   DIALOG_MIN_WIDTH,
   DIALOG_WIDTH,
+  HINT_D_REMOVE,
+  HINT_ENTER_SPACE_ENABLE,
+  HINT_ESC_CANCEL,
+  HINT_I_INSTALL_ASSERTS,
+  HINT_T_TOGGLE_DEFAULT,
   SectionNavigator,
   renderAssertDetail,
   renderDetailList,
+  renderHintLine,
 } from "./components.js";
 import type { AssertsState } from "./state.js";
 import { runInstallWizard } from "./install.js";
@@ -327,46 +333,22 @@ export class AssertsPanel {
   }
 
   private hintLine(width?: number): string[] {
-    const dim = (s: string) => this.theme.fg("dim", s);
-    const acc = (s: string) => this.theme.fg("accent", s);
     const focused = this.groups[this.nav.focusedSection];
     const hasRemove = focused && focused.source !== "local";
 
-    const items: string[] = [
-      acc("Enter/Space") + dim(" enable"),
-      acc("t") + dim(" Toggle default"),
+    const items: [string, string][] = [
+      HINT_ENTER_SPACE_ENABLE,
+      HINT_T_TOGGLE_DEFAULT,
     ];
 
     if (hasRemove) {
-      items.push(acc("d") + dim(" Remove"));
+      items.push(HINT_D_REMOVE);
     }
 
-    items.push(acc("i") + dim(" Install asserts"));
-    items.push(acc("Esc") + dim(" to cancel"));
+    items.push(HINT_I_INSTALL_ASSERTS);
+    items.push(HINT_ESC_CANCEL);
 
-    const indent = dim("  ");
-    const separator = dim(" · ");
-    const single = indent + items.join(separator);
-    if (width === undefined || visibleWidth(single) <= width) {
-      return [single];
-    }
-
-    // Greedy wrap: pack as many whole items as fit on the first line,
-    // then place the remaining items on an indented second line.
-    let firstLength = visibleWidth(indent + items[0]);
-    let breakIndex = 1;
-    while (breakIndex < items.length) {
-      const nextLength = visibleWidth(separator + items[breakIndex]);
-      if (firstLength + nextLength > width) break;
-      firstLength += nextLength;
-      breakIndex++;
-    }
-    if (breakIndex === 0) breakIndex = 1;
-
-    return [
-      indent + items.slice(0, breakIndex).join(separator),
-      indent + items.slice(breakIndex).join(separator),
-    ];
+    return renderHintLine(this.theme, width, items);
   }
 
   // ── Theme access ───────────────────────────────────────────────────
