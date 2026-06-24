@@ -136,6 +136,12 @@ export async function executeAgentEndAsserts(
   event: AgentEndEvent,
   ctx: ExtensionContext,
 ): Promise<string[]> {
+  // If the turn was interrupted, ctx.signal is already aborted and
+  // evaluateShell would SIGTERM every assert (code null) before it runs —
+  // reporting benign interrupts as spurious failures. Agent-end asserts
+  // are informational (they don't block), so skip them on abort.
+  if (ctx.signal?.aborted) return [];
+
   const failures: string[] = [];
   await runAsserts(asserts, event, ctx, {
     hook: "agent_end",

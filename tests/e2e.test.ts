@@ -882,4 +882,36 @@ describe("e2e: agent_end orchestration", () => {
     assert.ok(failures[0].includes("end-guard"));
     assert.ok(!failures[0].includes("tool-guard"));
   });
+
+  // 6.15 ── Already-aborted signal (interrupted turn) → no spurious failures ─
+  //
+  // When the user interrupts the agent, pi aborts the turn's AbortSignal and
+  // then fires agent_end with that already-aborted signal.  Without a guard,
+  // evaluateShell SIGTERMs every assert before it runs (code null), reporting
+  // benign interrupts as failures like `dummy-agent-end: true (exit null)`.
+  // Agent-end asserts are informational, so an already-aborted signal must
+  // short-circuit to no failures.
+
+  it("already-aborted signal → no spurious failures", async () => {
+    const cwd = setupConfig("e2e-ae-aborted", {
+      "dummy-agent-end": {
+        hook: "agent_end",
+        shell: "true",
+      },
+      "fail-check": {
+        hook: "agent_end",
+        shell: "false",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+    assert.strictEqual(asserts.length, 2);
+
+    const controller = new AbortController();
+    controller.abort();
+    const ctx: ExtensionContext = { cwd: "/tmp", signal: controller.signal };
+
+    const failures = await executeAgentEndAsserts(asserts, agentEndEvent, ctx);
+    assert.deepStrictEqual(failures, []);
+  });
 });
