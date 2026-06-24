@@ -4,6 +4,7 @@ import {
   Container,
   matchesKey,
   Key,
+  visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { Assert } from "../engine.js";
 import { removeRule, setAssertDefault } from "../installer.js";
@@ -13,7 +14,6 @@ import {
   SectionNavigator,
   renderAssertDetail,
   renderDetailList,
-  visibleLength,
 } from "./components.js";
 import type { AssertsState } from "./state.js";
 import { runInstallWizard } from "./install.js";
@@ -340,16 +340,16 @@ export class AssertsPanel {
     const indent = dim("  ");
     const separator = dim(" · ");
     const single = indent + items.join(separator);
-    if (width === undefined || visibleLength(single) <= width) {
+    if (width === undefined || visibleWidth(single) <= width) {
       return [single];
     }
 
     // Greedy wrap: pack as many whole items as fit on the first line,
     // then place the remaining items on an indented second line.
-    let firstLength = visibleLength(indent + items[0]);
+    let firstLength = visibleWidth(indent + items[0]);
     let breakIndex = 1;
     while (breakIndex < items.length) {
-      const nextLength = visibleLength(separator + items[breakIndex]);
+      const nextLength = visibleWidth(separator + items[breakIndex]);
       if (firstLength + nextLength > width) break;
       firstLength += nextLength;
       breakIndex++;

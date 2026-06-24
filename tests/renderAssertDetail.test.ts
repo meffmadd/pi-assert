@@ -6,7 +6,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { renderAssertDetail, renderDetailList, visibleLength, wrapText, DetailList } from "../pi-assert/ui/components.js";
+import { renderAssertDetail, renderDetailList, DetailList } from "../pi-assert/ui/components.js";
 import type { SelectItem } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
@@ -17,37 +17,6 @@ function mockTheme(): Theme {
     bold: (text: string) => text,
   } as unknown as Theme;
 }
-
-describe("visibleLength", () => {
-  it("measures plain text", () => {
-    assert.equal(visibleLength("hello"), 5);
-  });
-
-  it("strips ANSI escape sequences", () => {
-    assert.equal(visibleLength("\x1b[31mhello\x1b[0m"), 5);
-  });
-});
-
-describe("wrapText", () => {
-  it("returns short text on a single line", () => {
-    assert.deepEqual(wrapText("hello", 80), ["hello"]);
-  });
-
-  it("wraps at word boundaries", () => {
-    const out = wrapText("one two three four", 10);
-    assert.ok(out.length > 1);
-    assert.ok(out.every((l) => l.length <= 10));
-  });
-
-  it("hard-breaks a single word longer than the width", () => {
-    assert.deepEqual(wrapText("supercalifragilistic", 5), [
-      "super",
-      "calif",
-      "ragil",
-      "istic",
-    ]);
-  });
-});
 
 describe("renderAssertDetail", () => {
   it("renders the shell label and command", () => {

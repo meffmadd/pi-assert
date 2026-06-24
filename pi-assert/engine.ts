@@ -1,8 +1,14 @@
 import { exec } from "node:child_process";
-import { readFileSync, existsSync, mkdirSync, appendFileSync } from "node:fs";
+import { existsSync, mkdirSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
+import {
+  iterSections,
+  readSectionedFile,
+  validateEntryShape,
+  type SectionedFile,
+} from "./config.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -32,11 +38,6 @@ export interface Assert {
   path?: string;
 }
 
-/**
- * Shape of an asserts.json file — documented in `readSections`, which is
- * the only place that needs to understand the layout.  Kept here for
- * future maintainers; no runtime checks use this name.
- */
 /** Structured environment passed to shell commands for tool_call hooks. */
 export interface AssertEnv {
   PI_TOOL_NAME: string;
@@ -109,12 +110,6 @@ export interface ExtensionContext {
 // Config loading
 // ---------------------------------------------------------------------------
 
-/**
- * On-disk shape of an assert value (no `name`, no `source` — those come from
- * the section structure in the file).
- */
-type AssertOnDisk = Omit<Assert, "name" | "source" | "path">;
-
 /** A single per-file parse failure. */
 export interface LoadError {
   /** Absolute path of the file that failed. */
@@ -168,14 +163,10 @@ export function loadAsserts(cwd: string): Assert[] {
   let knownRepos: Set<string> | undefined;
   if (existsSync(projectPath)) {
     try {
-      const raw = JSON.parse(
-        readFileSync(projectPath, "utf-8"),
-      ) as Record<string, unknown>;
-      if (Array.isArray(raw.repos)) {
+      const file = readSectionedFile(projectPath);
+      if (Array.isArray(file.repos)) {
         knownRepos = new Set(
-          (raw.repos as string[]).filter(
-            (r) => typeof r === "string" && r.includes("/"),
-          ),
+          file.repos.filter((r) => typeof r === "string" && r.includes("/")),
         );
         knownRepos.add("local");
       }
@@ -249,29 +240,15 @@ function readSections(
   path: string,
   knownRepos?: Set<string>,
 ): Assert[] {
-  const content = readFileSync(path, "utf-8");
-  const raw = JSON.parse(content) as Record<string, unknown>;
+  const file: SectionedFile = readSectionedFile(path);
   const results: Assert[] = [];
 
-  // If knownRepos is provided, only accept those sections.
-  // If undefined, accept every object-typed section (backward compat).
-  const hasKnown = knownRepos !== undefined;
-
-  for (const [section, entries] of Object.entries(raw)) {
-    // Skip metadata keys (but NOT "local" — that's a real section)
-    if (section === "$schema" || section === "repos") continue;
-    if (typeof entries !== "object" || entries === null) continue;
-
-    // Filter to known repos when the caller provides a set
-    if (hasKnown && !knownRepos.has(section)) continue;
-
-    for (const [name, def] of Object.entries(
-      entries as Record<string, unknown>,
-    )) {
-      if (isValidAssert(def)) {
+  for (const { source, entries } of iterSections(file, knownRepos)) {
+    for (const [name, def] of Object.entries(entries)) {
+      if (validateEntryShape(def)) {
         results.push({
           name,
-          source: section,
+          source,
           hook: def.hook,
           filter: def.filter,
           when: def.when,
@@ -284,12 +261,6 @@ function readSections(
   }
 
   return results;
-}
-
-function isValidAssert(def: unknown): def is AssertOnDisk {
-  if (typeof def !== "object" || def === null) return false;
-  const d = def as Record<string, unknown>;
-  return typeof d.hook === "string" && typeof d.shell === "string";
 }
 
 // ---------------------------------------------------------------------------

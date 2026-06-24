@@ -1,6 +1,11 @@
-import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join, dirname } from "node:path";
 import type { SelectItem } from "@earendil-works/pi-tui";
+import {
+  projectFilePath,
+  readSectionedFile,
+  writeSectionedFile,
+  validateEntryShape,
+  type SectionedFile,
+} from "./config.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -144,8 +149,9 @@ export async function fetchRuleFile(
 
   const entries: RuleEntries = {};
   for (const [name, def] of Object.entries(parsed as Record<string, unknown>)) {
-    if (!isValidRuleEntry(def)) continue;
-    entries[name] = def;
+    if (validateEntryShape(def, { requireDescription: true })) {
+      entries[name] = def;
+    }
   }
 
   return entries;
@@ -157,73 +163,37 @@ interface GitHubFileItem {
   encoding?: string;
 }
 
-function isValidRuleEntry(def: unknown): def is RuleEntry {
-  if (typeof def !== "object" || def === null) return false;
-  const d = def as Record<string, unknown>;
-  return (
-    typeof d.description === "string" &&
-    typeof d.hook === "string" &&
-    typeof d.shell === "string"
-  );
-}
-
 // ---------------------------------------------------------------------------
-// Structured file I/O (sectioned format)
+// Install / remove
 // ---------------------------------------------------------------------------
-
-/** Shape of the sectioned .pi/asserts.json file. */
-interface SectionedFile {
-  $schema?: string;
-  repos?: string[];
-  local?: Record<string, unknown>;
-  [repo: string]: unknown;
-}
-
-/** Resolve the project .pi/asserts.json path for a given cwd. */
-function projectFilePath(cwd: string): string {
-  return join(cwd, ".pi", "asserts.json");
-}
 
 /**
- * Path-based read of a sectioned asserts file.  Returns `{}` when the
- * file is missing or unparseable (the latter matches the historical
- * behaviour of the cwd-based helper and keeps install/remove
- * best-effort).  Used by the cwd-based `readFile` and by
- * `setAssertDefault` when the caller already knows the absolute path.
+ * Best-effort project-file read: returns `{}` when the file is missing or
+ * unparseable (matches the historical install/remove behaviour — install
+ * should create the file, remove should no-op, never throw on a broken
+ * config).  The runtime loader (`engine.ts`) instead uses `readSectionedFile`
+ * directly so it can surface parse errors.
  */
-function readSectionedFile(path: string): SectionedFile {
-  if (!existsSync(path)) return {};
-
-  const raw = readFileSync(path, "utf-8");
+function readProjectFile(cwd: string): SectionedFile {
   try {
-    const parsed = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) return {};
-    return parsed as SectionedFile;
+    return readSectionedFile(projectFilePath(cwd));
   } catch {
     return {};
   }
 }
 
-/** Path-based write of a sectioned asserts file.  Creates parent dirs. */
-function writeSectionedFile(path: string, data: SectionedFile): void {
-  const dir = dirname(path);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+/** Best-effort path-based read (for `setAssertDefault`, which takes a path). */
+function readProjectFileAt(path: string): SectionedFile {
+  try {
+    return readSectionedFile(path);
+  } catch {
+    return {};
   }
-  writeFileSync(path, JSON.stringify(data, null, 2) + "\n", "utf-8");
 }
 
-function readFile(cwd: string): SectionedFile {
-  return readSectionedFile(projectFilePath(cwd));
-}
-
-function writeFile(cwd: string, data: SectionedFile): void {
+function writeProjectFile(cwd: string, data: SectionedFile): void {
   writeSectionedFile(projectFilePath(cwd), data);
 }
-
-// ---------------------------------------------------------------------------
-// Install / remove
-// ---------------------------------------------------------------------------
 
 /**
  * Install a single assert into the project's `.pi/asserts.json`
@@ -241,7 +211,7 @@ export function installRule(
   name: string,
   entry: RuleEntry,
 ): boolean {
-  const current = readFile(cwd);
+  const current = readProjectFile(cwd);
 
   // Ensure repo is in the repos array
   if (!current.repos) current.repos = [];
@@ -269,7 +239,7 @@ export function installRule(
   const overwritten = section[name] !== undefined;
 
   section[name] = clean;
-  writeFile(cwd, current);
+  writeProjectFile(cwd, current);
   return overwritten;
 }
 
@@ -283,7 +253,7 @@ export function removeRule(
   repo: string,
   name: string,
 ): boolean {
-  const current = readFile(cwd);
+  const current = readProjectFile(cwd);
 
   const section = current[repo] as Record<string, unknown> | undefined;
   if (!section || typeof section !== "object" || !(name in section)) {
@@ -297,7 +267,7 @@ export function removeRule(
     delete current[repo];
   }
 
-  writeFile(cwd, current);
+  writeProjectFile(cwd, current);
   return true;
 }
 
@@ -321,7 +291,7 @@ export function setAssertDefault(
   name: string,
   value: boolean,
 ): void {
-  const current = readSectionedFile(path);
+  const current = readProjectFileAt(path);
 
   const section = current[source] as Record<string, unknown> | undefined;
   if (!section || typeof section !== "object" || !(name in section)) {
@@ -352,7 +322,7 @@ export function setAssertDefault(
  * These are the repos the user has configured for installing asserts.
  */
 export function getInstalledRepos(cwd: string): string[] {
-  const current = readFile(cwd);
+  const current = readProjectFile(cwd);
   return current.repos ?? [];
 }
 
@@ -367,12 +337,12 @@ export function addRepo(cwd: string, repo: string): void {
     throw new Error(`Invalid repo format: "${repo}". Expected owner/repo.`);
   }
 
-  const current = readFile(cwd);
+  const current = readProjectFile(cwd);
   if (!current.repos) current.repos = [];
   if (current.repos.includes(repo)) return; // already present
 
   current.repos.push(repo);
-  writeFile(cwd, current);
+  writeProjectFile(cwd, current);
 }
 
 // ---------------------------------------------------------------------------

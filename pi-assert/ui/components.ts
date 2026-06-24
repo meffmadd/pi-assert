@@ -8,6 +8,7 @@ import {
   Text,
   truncateToWidth,
   visibleWidth,
+  wrapTextWithAnsi,
   type SelectItem,
 } from "@earendil-works/pi-tui";
 
@@ -15,35 +16,9 @@ import {
 // Shared text helpers
 // ---------------------------------------------------------------------------
 
-/** Strip ANSI escape sequences so we can measure visible text width. */
-export function visibleLength(s: string): number {
-  return s.replace(/\x1b\[[0-9;]*m/g, "").length;
-}
-
-/**
- * Wrap plain text at word boundaries (or hard boundaries when a single
- * word exceeds the allowed width).  Preserves existing line breaks.
- * Returns one entry per visual line.
- */
-export function wrapText(text: string, width: number): string[] {
-  const lines: string[] = [];
-  for (const rawLine of text.split("\n")) {
-    let line = rawLine;
-    while (line.length > width) {
-      let breakAt = width;
-      const spaceIndex = line.lastIndexOf(" ", width);
-      if (spaceIndex > 0) {
-        breakAt = spaceIndex;
-      }
-      lines.push(line.slice(0, breakAt));
-      line = line.slice(breakAt).trimStart();
-    }
-    if (line.length > 0 || lines.length === 0) {
-      lines.push(line);
-    }
-  }
-  return lines;
-}
+// Text measurement and wrapping come from pi-tui (`visibleWidth`,
+// `wrapTextWithAnsi`) so the whole project uses one ANSI-aware, wide-char
+// aware implementation.  The detail-block helpers below build on those.
 
 /**
  * Render the `shell:` / `when:` detail block used by both the /asserts
@@ -65,7 +40,7 @@ export function renderAssertDetail(
   const lines: string[] = [];
 
   const shellWidth = Math.max(1, width - indent - shellLabel.length);
-  const shellLines = wrapText(entry.shell, shellWidth);
+  const shellLines = wrapTextWithAnsi(entry.shell, shellWidth);
   for (let i = 0; i < shellLines.length; i++) {
     if (i === 0) {
       lines.push(" ".repeat(indent) + dim(shellLabel) + muted(shellLines[i]!));
@@ -78,7 +53,7 @@ export function renderAssertDetail(
 
   if (entry.when) {
     const whenWidth = Math.max(1, width - indent - whenLabel.length);
-    const whenLines = wrapText(entry.when, whenWidth);
+    const whenLines = wrapTextWithAnsi(entry.when, whenWidth);
     for (let i = 0; i < whenLines.length; i++) {
       if (i === 0) {
         lines.push(" ".repeat(indent) + dim(whenLabel) + muted(whenLines[i]!));
@@ -116,6 +91,63 @@ function titledBox(theme: Theme, title: string, children: Component[]): Containe
 }
 
 // ---------------------------------------------------------------------------
+// dialogShell — the shared overlay scaffolding for every install-flow
+// dialog.  Wraps a body component in a titled box with a hint line, wires
+// the overlay options (centered, fixed width, margin), and returns the
+// `{render, invalidate, handleInput}` triple `ctx.ui.custom` expects.
+//
+// `selectDialog` and `textInputDialog` both build on this so the titled
+// border + hint + overlay geometry live in one place; each only supplies
+// its body component and input handler.
+// ---------------------------------------------------------------------------
+export interface DialogShellOptions {
+  title: string;
+  /** Body component rendered between the title border and the hint. */
+  body: Component;
+  hint?: string;
+  /** Default hint when the caller omits one. */
+  defaultHint?: string;
+  maxHeight: number;
+}
+
+function dialogShell(
+  ctx: ExtensionContext,
+  theme: Theme,
+  opts: DialogShellOptions,
+): {
+  render: (w: number) => string[];
+  invalidate: () => void;
+} {
+  const container = titledBox(theme, opts.title, [
+    opts.body,
+    new Text(
+      theme.fg("dim", opts.hint ?? opts.defaultHint ?? "↑↓ navigate • enter select • esc cancel"),
+      1,
+      0,
+    ),
+  ]);
+
+  return {
+    render: (w: number) => container.render(w),
+    invalidate: () => container.invalidate(),
+  };
+}
+
+/** Shared overlay options for every install-flow dialog. */
+function dialogOverlay(maxHeight: number) {
+  return {
+    overlay: true as const,
+    overlayOptions: {
+      anchor: "center" as const,
+      width: DIALOG_WIDTH,
+      minWidth: DIALOG_MIN_WIDTH,
+      maxHeight,
+      margin: 4,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // selectDialog — the single install-flow picker.  Every install view (repo
 // picker, rule-file picker, assert-entry picker) goes through here so they
 // all share the same navigation, "> " highlight prefix, windowing, scroll
@@ -138,6 +170,10 @@ export async function selectDialog<T>(
   },
 ): Promise<T | null> {
   const hasDetail = !!opts.detailFor;
+  const maxHeight = Math.min(
+    opts.items.length + (hasDetail ? 12 : 4),
+    hasDetail ? 24 : 16,
+  );
 
   return ctx.ui.custom<T | null>((tui, theme, _kb, done) => {
     const max = opts.maxVisible ?? Math.min(opts.items.length, hasDetail ? 10 : 12);
@@ -176,30 +212,22 @@ export async function selectDialog<T>(
     list.onSelect = (item) => done(item.value as T);
     list.onCancel = () => done(null);
 
-    const container = titledBox(theme, opts.title, [
-      list,
-      new Text(theme.fg("dim", opts.hint ?? "↑↓ navigate • enter select • esc cancel"), 1, 0),
-    ]);
+    const shell = dialogShell(ctx, theme, {
+      title: opts.title,
+      body: list,
+      hint: opts.hint,
+      maxHeight,
+    });
 
     return {
-      render: (w: number) => container.render(w),
-      invalidate: () => container.invalidate(),
+      render: shell.render,
+      invalidate: shell.invalidate,
       handleInput: (data: string) => {
         list.handleInput(data);
         tui.requestRender();
       },
     };
-  }, {
-    overlay: true,
-    overlayOptions: {
-      anchor: "center",
-      width: DIALOG_WIDTH,
-      minWidth: DIALOG_MIN_WIDTH,
-      // Reserve room for the multi-line detail block when present.
-      maxHeight: Math.min(opts.items.length + (hasDetail ? 12 : 4), hasDetail ? 24 : 16),
-      margin: 4,
-    },
-  });
+  }, dialogOverlay(maxHeight));
 }
 
 // ---------------------------------------------------------------------------
@@ -343,6 +371,8 @@ export async function textInputDialog(
   ctx: ExtensionContext,
   opts: { title: string; label: string; hint?: string; initial?: string },
 ): Promise<string | null> {
+  const maxHeight = 8;
+
   return ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
     let buffer = opts.initial ?? "";
 
@@ -353,15 +383,23 @@ export async function textInputDialog(
       invalidate() {}
     })();
 
-    const container = titledBox(theme, opts.title, [
-      new Text(theme.fg("muted", opts.label), 1, 0),
-      inputDisplay,
-      new Text(theme.fg("dim", opts.hint ?? "enter confirm • esc cancel"), 1, 0),
-    ]);
+    // Body = label + input field, wrapped so dialogShell can place it
+    // between the title border and the hint (which it appends itself).
+    const body = new Container();
+    body.addChild(new Text(theme.fg("muted", opts.label), 1, 0));
+    body.addChild(inputDisplay);
+
+    const shell = dialogShell(ctx, theme, {
+      title: opts.title,
+      body,
+      hint: opts.hint,
+      defaultHint: "enter confirm • esc cancel",
+      maxHeight,
+    });
 
     return {
-      render: (w: number) => container.render(w),
-      invalidate: () => container.invalidate(),
+      render: shell.render,
+      invalidate: shell.invalidate,
       handleInput: (data: string) => {
         if (matchesKey(data, Key.escape)) {
           done(null);
@@ -386,16 +424,7 @@ export async function textInputDialog(
         }
       },
     };
-  }, {
-    overlay: true,
-    overlayOptions: {
-      anchor: "center",
-      width: DIALOG_WIDTH,
-      minWidth: DIALOG_MIN_WIDTH,
-      maxHeight: 8,
-      margin: 4,
-    },
-  });
+  }, dialogOverlay(maxHeight));
 }
 
 // ---------------------------------------------------------------------------
