@@ -65,7 +65,14 @@ export class AssertsPanel {
     if (this.groups.length === 0) {
       return [
         ...this.renderHeaderLines(),
-        this.theme.fg("dim", "No asserts defined."),
+        this.theme.fg(
+          "dim",
+          "No asserts defined! Prompt your agent or press " +
+            this.theme.fg("accent", "i") +
+            " to install.",
+        ),
+        "",
+        ...this.hintLine(width),
       ];
     }
 
