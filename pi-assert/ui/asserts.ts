@@ -7,36 +7,16 @@ import {
 } from "@earendil-works/pi-tui";
 import type { Assert } from "../engine.js";
 import { removeRule, setAssertDefault } from "../installer.js";
-import { DIALOG_MIN_WIDTH, DIALOG_WIDTH, SectionNavigator } from "./components.js";
+import {
+  DIALOG_MIN_WIDTH,
+  DIALOG_WIDTH,
+  SectionNavigator,
+  renderAssertDetail,
+  renderDetailList,
+  visibleLength,
+} from "./components.js";
 import type { AssertsState } from "./state.js";
 import { runInstallWizard } from "./install.js";
-
-// Strip ANSI escape sequences so we can measure visible text width.
-function visibleLength(s: string): number {
-  return s.replace(/\x1b\[[0-9;]*m/g, "").length;
-}
-
-// Wrap plain text at word boundaries (or hard boundaries when a single word
-// exceeds the allowed width). Preserves existing line breaks.
-function wrapText(text: string, width: number): string[] {
-  const lines: string[] = [];
-  for (const rawLine of text.split("\n")) {
-    let line = rawLine;
-    while (line.length > width) {
-      let breakAt = width;
-      const spaceIndex = line.lastIndexOf(" ", width);
-      if (spaceIndex > 0) {
-        breakAt = spaceIndex;
-      }
-      lines.push(line.slice(0, breakAt));
-      line = line.slice(breakAt).trimStart();
-    }
-    if (line.length > 0 || lines.length === 0) {
-      lines.push(line);
-    }
-  }
-  return lines;
-}
 
 // ---------------------------------------------------------------------------
 // Group: an ordered list of asserts that share a `source`.
@@ -114,7 +94,7 @@ export class AssertsPanel {
     const activeLen = activeGroup.asserts.length;
     const selectedAssert = activeGroup.asserts[this.nav.focusedIndex];
     const detailBlock = selectedAssert
-      ? this.renderDetail(width, selectedAssert)
+      ? renderAssertDetail(this.theme, width, selectedAssert)
       : [];
 
     const available =
@@ -279,89 +259,42 @@ export class AssertsPanel {
       return lines;
     }
 
-    // Active section: render manually so the navigator's selected index is
-    // respected.  (A fresh SettingsList always starts at selectedIndex 0, so
-    // it cannot follow our external keyboard focus.)
+    // Active section: delegate to the shared renderDetailList so the row
+    // layout, "> " highlight prefix, and inline shell/when detail block are
+    // identical to the install wizard's assert-entry picker.  We pass our
+    // own [start, end) window (the panel manages per-section scrolling and
+    // renders its own scroll indicator outside the section).
     const maxLabelWidth = Math.max(
       ...group.asserts.map((a) =>
         (a.default ? `${a.name} (default)` : a.name).length
       ),
     );
+    const theme = this.theme;
+    const active = this.state.active;
 
-    const lines: string[] = [];
-    for (let i = start; i < end; i++) {
-      const a = group.asserts[i];
-      if (!a) continue;
-      const selected = i === selectedIndex;
-      const label = a.default ? `${a.name} (default)` : a.name;
-      const status = this.state.active.has(a.name) ? "enabled" : "disabled";
-      const padding = " ".repeat(Math.max(0, maxLabelWidth - label.length));
-
-      const prefix = selected
-        ? this.theme.fg("accent", "> ")
-        : "  ";
-      const labelText = selected
-        ? this.theme.fg("accent", label + padding)
-        : label + padding;
-      const valueText = selected
-        ? this.theme.fg("accent", status)
-        : this.theme.fg("dim", status);
-
-      lines.push(`${prefix}${labelText}  ${valueText}`);
-
-      if (selected) {
-        lines.push(...this.renderDetail(width, a));
-      }
-    }
-    return lines;
+    return renderDetailList(theme, width, {
+      items: group.asserts,
+      selectedIndex,
+      window: [start, end],
+      showScrollIndicator: false,
+      renderRow: (a, selected) => {
+        const label = a.default ? `${a.name} (default)` : a.name;
+        const status = active.has(a.name) ? "enabled" : "disabled";
+        const padding = " ".repeat(Math.max(0, maxLabelWidth - label.length));
+        const labelText = selected
+          ? theme.fg("accent", label + padding)
+          : label + padding;
+        const valueText = selected
+          ? theme.fg("accent", status)
+          : theme.fg("dim", status);
+        return `${labelText}  ${valueText}`;
+      },
+      detailFor: (a) => ({ shell: a.shell, when: a.when }),
+    });
   }
 
   private renderInactiveSectionHeader(group: Group): string[] {
     return [this.renderSectionHeader(group, false)];
-  }
-
-  /** Render the shell/when detail panel for the highlighted assert. */
-  private renderDetail(width: number, assert: Assert): string[] {
-    const dim = (s: string) => this.theme.fg("dim", s);
-    const muted = (s: string) => this.theme.fg("muted", s);
-
-    const indent = 4;
-    const shellLabel = "shell: ";
-    const whenLabel = "when: ";
-
-    const lines: string[] = [];
-
-    const shellWidth = Math.max(1, width - indent - shellLabel.length);
-    const shellLines = wrapText(assert.shell, shellWidth);
-    for (let i = 0; i < shellLines.length; i++) {
-      if (i === 0) {
-        lines.push(
-          " ".repeat(indent) + dim(shellLabel) + muted(shellLines[i]),
-        );
-      } else {
-        lines.push(
-          " ".repeat(indent + shellLabel.length) + muted(shellLines[i]),
-        );
-      }
-    }
-
-    if (assert.when) {
-      const whenWidth = Math.max(1, width - indent - whenLabel.length);
-      const whenLines = wrapText(assert.when, whenWidth);
-      for (let i = 0; i < whenLines.length; i++) {
-        if (i === 0) {
-          lines.push(
-            " ".repeat(indent) + dim(whenLabel) + muted(whenLines[i]),
-          );
-        } else {
-          lines.push(
-            " ".repeat(indent + whenLabel.length) + muted(whenLines[i]),
-          );
-        }
-      }
-    }
-
-    return lines;
   }
 
   /** Return the [start, end) slice of the active section that stays visible. */

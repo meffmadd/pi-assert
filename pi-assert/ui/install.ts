@@ -139,6 +139,11 @@ async function promptAssertEntry(
     title: fileName,
     items,
     hint: "↑↓ navigate • enter install • esc back",
+    detailFor: (value) => {
+      const e = entries[value];
+      if (!e) return undefined;
+      return { shell: e.shell, when: e.when };
+    },
   });
 }
 
