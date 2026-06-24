@@ -1,5 +1,5 @@
 import { exec } from "node:child_process";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
@@ -319,6 +319,42 @@ export function matchFilter(
 }
 
 // ---------------------------------------------------------------------------
+// Env logging (debug)
+// ---------------------------------------------------------------------------
+
+/**
+ * Debug helper: when `PIASSERT_LOG_ENV` is set to `"true"` (case-insensitive),
+ * append a JSONL record describing an env about to be handed to a shell to
+ * `~/.pi/.assert-env-log/<YYYY-MM-DD>.jsonl`.
+ *
+ * Called from each `build*Env` so every env creation (one per matching
+ * assert per event) is logged. Records contain only the env + hook + ISO
+ * timestamp — no shell results, no assert identity. File I/O failures are
+ * swallowed so logging can never break an assert.
+ */
+function logEnv(
+  env: Record<string, string>,
+  hook: "tool_call" | "tool_result" | "agent_end",
+): void {
+  if (process.env.PIASSERT_LOG_ENV?.toLowerCase() !== "true") return;
+
+  try {
+    const dir = join(homedir(), ".pi", ".assert-env-log");
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const file = join(dir, `${today}.jsonl`);
+    const record = JSON.stringify({
+      ts: new Date().toISOString(),
+      hook,
+      env,
+    });
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(file, record + "\n");
+  } catch {
+    // Never let logging break an assert.
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Environment builder
 // ---------------------------------------------------------------------------
 
@@ -329,12 +365,14 @@ export function buildEnv(
   event: ToolCallEvent,
   ctx: ExtensionContext,
 ): AssertEnv {
-  return {
+  const env: AssertEnv = {
     PI_TOOL_NAME: event.toolName,
     PI_TOOL_CALL_ID: event.toolCallId,
     PI_TOOL_INPUT: JSON.stringify(event.input),
     PI_CWD: ctx.cwd,
   };
+  logEnv(env, "tool_call");
+  return env;
 }
 
 /**
@@ -344,10 +382,12 @@ export function buildAgentEndEnv(
   _event: AgentEndEvent,
   ctx: ExtensionContext,
 ): AgentEndEnv {
-  return {
+  const env: AgentEndEnv = {
     PI_EVENT: "agent_end",
     PI_CWD: ctx.cwd,
   };
+  logEnv(env, "agent_end");
+  return env;
 }
 
 /**
@@ -365,7 +405,7 @@ export function buildResultEnv(
     .filter((c): c is TextContent => c.type === "text")
     .map((c) => c.text);
 
-  return {
+  const env: ToolResultEnv = {
     PI_TOOL_NAME: event.toolName,
     PI_TOOL_CALL_ID: event.toolCallId,
     PI_TOOL_INPUT: JSON.stringify(event.input),
@@ -373,6 +413,8 @@ export function buildResultEnv(
     PI_TOOL_IS_ERROR: event.isError ? "true" : "false",
     PI_CWD: ctx.cwd,
   };
+  logEnv(env, "tool_result");
+  return env;
 }
 
 // ---------------------------------------------------------------------------
