@@ -471,18 +471,18 @@ describe("installRule", () => {
       name: "my-rule",
       entry: { description: "A test rule.", hook: "tool_call", shell: "false" },
       expected: {
-        "meffmadd/pi-assert-rules": { "my-rule": { hook: "tool_call", shell: "false" } },
+        "meffmadd/pi-assert-rules": { "my-rule": { description: "A test rule.", hook: "tool_call", shell: "false" } },
         repos: ["meffmadd/pi-assert-rules"],
       },
     },
     {
-      label: "strips description from written output",
+      label: "keeps description in written output",
       initialJson: undefined,
       repo: "some/repo",
       name: "my-rule",
-      entry: { description: "This should NOT appear.", hook: "tool_call", shell: "false" },
+      entry: { description: "This should appear.", hook: "tool_call", shell: "false" },
       expected: {
-        "some/repo": { "my-rule": { hook: "tool_call", shell: "false" } },
+        "some/repo": { "my-rule": { description: "This should appear.", hook: "tool_call", shell: "false" } },
         repos: ["some/repo"],
       },
     },
@@ -493,7 +493,7 @@ describe("installRule", () => {
       name: "my-rule",
       entry: { description: "Test.", hook: "tool_call", filter: { toolName: "write" }, shell: "false" },
       expected: {
-        "some/repo": { "my-rule": { hook: "tool_call", filter: { toolName: "write" }, shell: "false" } },
+        "some/repo": { "my-rule": { description: "Test.", hook: "tool_call", filter: { toolName: "write" }, shell: "false" } },
         repos: ["some/repo"],
       },
     },
@@ -504,7 +504,7 @@ describe("installRule", () => {
       name: "my-rule",
       entry: { description: "Test.", hook: "tool_call", when: "git diff --quiet", shell: "false" },
       expected: {
-        "some/repo": { "my-rule": { hook: "tool_call", when: "git diff --quiet", shell: "false" } },
+        "some/repo": { "my-rule": { description: "Test.", hook: "tool_call", when: "git diff --quiet", shell: "false" } },
         repos: ["some/repo"],
       },
     },
@@ -515,7 +515,7 @@ describe("installRule", () => {
       name: "my-rule",
       entry: { description: "Test.", hook: "tool_call", shell: "false", default: true },
       expected: {
-        "some/repo": { "my-rule": { hook: "tool_call", shell: "false", default: true } },
+        "some/repo": { "my-rule": { description: "Test.", hook: "tool_call", shell: "false", default: true } },
         repos: ["some/repo"],
       },
     },
@@ -526,7 +526,7 @@ describe("installRule", () => {
       name: "my-rule",
       entry: { description: "Test.", hook: "tool_call", shell: "false" },
       expected: {
-        "some/repo": { "my-rule": { hook: "tool_call", shell: "false" } },
+        "some/repo": { "my-rule": { description: "Test.", hook: "tool_call", shell: "false" } },
         repos: ["some/repo"],
       },
     },
@@ -538,7 +538,7 @@ describe("installRule", () => {
       entry: { description: "Test.", hook: "tool_call", filter: { toolName: "bash" }, when: "true", shell: "false", default: true },
       expected: {
         "some/repo": {
-          "my-rule": { hook: "tool_call", filter: { toolName: "bash" }, when: "true", shell: "false", default: true },
+          "my-rule": { description: "Test.", hook: "tool_call", filter: { toolName: "bash" }, when: "true", shell: "false", default: true },
         },
         repos: ["some/repo"],
       },
@@ -553,7 +553,7 @@ describe("installRule", () => {
       entry: { description: "New rule.", hook: "tool_call", filter: { toolName: "bash" }, shell: "false" },
       expected: {
         local: { existing: { hook: "tool_call", shell: "true" } },
-        "meffmadd/pi-assert-rules": { "new-rule": { hook: "tool_call", filter: { toolName: "bash" }, shell: "false" } },
+        "meffmadd/pi-assert-rules": { "new-rule": { description: "New rule.", hook: "tool_call", filter: { toolName: "bash" }, shell: "false" } },
         repos: ["meffmadd/pi-assert-rules"],
       },
     },
@@ -564,7 +564,7 @@ describe("installRule", () => {
       name: "my-rule",
       entry: { description: "Updated.", hook: "tool_call", shell: "new" },
       expected: {
-        "meffmadd/pi-assert-rules": { "my-rule": { hook: "tool_call", shell: "new" } },
+        "meffmadd/pi-assert-rules": { "my-rule": { description: "Updated.", hook: "tool_call", shell: "new" } },
         repos: ["meffmadd/pi-assert-rules"],
       },
     },
@@ -575,7 +575,7 @@ describe("installRule", () => {
       name: "my-rule",
       entry: { description: "Test.", hook: "tool_call", shell: "true" },
       expected: {
-        "some/repo": { "my-rule": { hook: "tool_call", shell: "true" } },
+        "some/repo": { "my-rule": { description: "Test.", hook: "tool_call", shell: "true" } },
         repos: ["some/repo"],
       },
     },
@@ -586,8 +586,8 @@ describe("installRule", () => {
       name: "rule2",
       entry: { description: "Second.", hook: "tool_call", shell: "false" },
       expected: {
-        "repo/a": { rule1: { hook: "tool_call", shell: "true" } },
-        "repo/b": { rule2: { hook: "tool_call", shell: "false" } },
+        "repo/a": { rule1: { description: "First.", hook: "tool_call", shell: "true" } },
+        "repo/b": { rule2: { description: "Second.", hook: "tool_call", shell: "false" } },
         repos: ["repo/a", "repo/b"],
       },
     },
@@ -599,7 +599,7 @@ describe("installRule", () => {
       entry: { description: "A rule.", hook: "tool_call", shell: "false" },
       expected: {
         repos: ["meffmadd/pi-assert-rules"],
-        "meffmadd/pi-assert-rules": { "my-rule": { hook: "tool_call", shell: "false" } },
+        "meffmadd/pi-assert-rules": { "my-rule": { description: "A rule.", hook: "tool_call", shell: "false" } },
       },
     },
   ];

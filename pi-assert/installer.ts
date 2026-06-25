@@ -13,7 +13,7 @@ import {
 
 /** A single entry in a rules/*.json file from a pi-assert-rules repo. */
 export interface RuleEntry {
-  /** Human-readable description shown in the install TUI. Stripped on install. */
+  /** Human-readable description shown in the install TUI and persisted on install. */
   description: string;
   hook: string;
   filter?: Record<string, unknown>;
@@ -110,7 +110,8 @@ export async function fetchRuleFiles(
 /**
  * Fetch and parse a single rules/*.json file from a GitHub repo.
  *
- * Returns only entries that have a `description`, `hook`, and `shell`.
+ * Returns only entries that have a `description`, `hook`, and `shell`
+ * (all required by the schema).
  */
 export async function fetchRuleFile(
   repo: string,
@@ -149,7 +150,7 @@ export async function fetchRuleFile(
 
   const entries: RuleEntries = {};
   for (const [name, def] of Object.entries(parsed as Record<string, unknown>)) {
-    if (validateEntryShape(def, { requireDescription: true })) {
+    if (validateEntryShape(def)) {
       entries[name] = def;
     }
   }
@@ -199,7 +200,8 @@ function writeProjectFile(cwd: string, data: SectionedFile): void {
  * Install a single assert into the project's `.pi/asserts.json`
  * under the given `repo` key (e.g. "meffmadd/pi-assert-rules").
  *
- * Strips the `description` field — only schema-valid fields are persisted.
+ * Only schema-valid fields are persisted (including `description`,
+ * which is required on disk).
  *
  * Returns `true` if an existing assert with the same `name` was
  * overwritten, `false` for a fresh install.  Callers with UI access
@@ -225,8 +227,9 @@ export function installRule(
   }
   const section = current[repo] as Record<string, unknown>;
 
-  // Build the clean assert definition (no `description`)
+  // Build the clean assert definition (only schema-valid fields).
   const clean: Record<string, unknown> = {
+    description: entry.description,
     hook: entry.hook,
     shell: entry.shell,
   };

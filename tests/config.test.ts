@@ -42,8 +42,8 @@ function writeTmp(name: string, content: string): string {
 // ---------------------------------------------------------------------------
 
 describe("validateEntryShape", () => {
-  it("accepts an entry with hook + shell", () => {
-    assert.ok(validateEntryShape({ hook: "tool_call", shell: "false" }));
+  it("accepts an entry with description + hook + shell", () => {
+    assert.ok(validateEntryShape({ description: "d", hook: "tool_call", shell: "false" }));
   });
 
   it("accepts an entry with all optional fields", () => {
@@ -59,12 +59,22 @@ describe("validateEntryShape", () => {
     );
   });
 
+  it("rejects entries missing description", () => {
+    assert.ok(!validateEntryShape({ hook: "tool_call", shell: "false" }));
+  });
+
+  it("rejects non-string description", () => {
+    assert.ok(
+      !validateEntryShape({ description: 5, hook: "tool_call", shell: "false" }),
+    );
+  });
+
   it("rejects entries missing hook", () => {
-    assert.ok(!validateEntryShape({ shell: "false" }));
+    assert.ok(!validateEntryShape({ description: "d", shell: "false" }));
   });
 
   it("rejects entries missing shell", () => {
-    assert.ok(!validateEntryShape({ hook: "tool_call" }));
+    assert.ok(!validateEntryShape({ description: "d", hook: "tool_call" }));
   });
 
   it("rejects non-object entries", () => {
@@ -73,30 +83,10 @@ describe("validateEntryShape", () => {
     assert.ok(!validateEntryShape(42));
   });
 
-  it("does NOT require description by default (on-disk entries)", () => {
-    assert.ok(validateEntryShape({ hook: "tool_call", shell: "false" }));
-  });
-
-  it("requires description when { requireDescription: true } (rule-repo entries)", () => {
+  it("requires description (on-disk and rule-repo entries)", () => {
+    assert.ok(!validateEntryShape({ hook: "tool_call", shell: "false" }));
     assert.ok(
-      !validateEntryShape({ hook: "tool_call", shell: "false" }, {
-        requireDescription: true,
-      }),
-    );
-    assert.ok(
-      validateEntryShape(
-        { description: "d", hook: "tool_call", shell: "false" },
-        { requireDescription: true },
-      ),
-    );
-  });
-
-  it("rejects non-string description under requireDescription", () => {
-    assert.ok(
-      !validateEntryShape(
-        { description: 5, hook: "tool_call", shell: "false" },
-        { requireDescription: true },
-      ),
+      validateEntryShape({ description: "d", hook: "tool_call", shell: "false" }),
     );
   });
 });

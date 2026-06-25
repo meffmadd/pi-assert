@@ -100,11 +100,11 @@ export function iterSections(
 
 /**
  * Fields shared by every assert entry, whether on disk or in a rules repo.
- * `description` is optional on disk but required in rule-repo entries
- * (where it drives the install picker).
+ * `description` is required everywhere: on-disk entries need it for the
+ * /asserts panel, and rule-repo entries use it to drive the install picker.
  */
 export interface EntryFields {
-  description?: string;
+  description: string;
   hook: string;
   filter?: Record<string, unknown>;
   when?: string;
@@ -115,25 +115,14 @@ export interface EntryFields {
 /**
  * Type guard for an assert entry's shape.
  *
- * Requires `hook` and `shell` to be strings.  Pass
- * `{ requireDescription: true }` to additionally require a string
- * `description` — used by the installer, which only lists entries that
- * have a human-readable description for the picker.
+ * Requires `description`, `hook`, and `shell` to be strings.  Used by
+ * both the runtime loader (on-disk entries) and the installer
+ * (rule-repo entries) — description is required in both.
  */
-export function validateEntryShape(def: unknown): def is EntryFields;
-export function validateEntryShape(
-  def: unknown,
-  opts: { requireDescription: true },
-): def is EntryFields & { description: string };
-export function validateEntryShape(
-  def: unknown,
-  opts?: { requireDescription?: boolean },
-): def is EntryFields {
+export function validateEntryShape(def: unknown): def is EntryFields {
   if (typeof def !== "object" || def === null) return false;
   const d = def as Record<string, unknown>;
+  if (typeof d.description !== "string") return false;
   if (typeof d.hook !== "string" || typeof d.shell !== "string") return false;
-  if (opts?.requireDescription && typeof d.description !== "string") {
-    return false;
-  }
   return true;
 }

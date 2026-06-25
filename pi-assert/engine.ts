@@ -19,6 +19,8 @@ export interface Assert {
   name: string;
   /** Source section: "local" or a repo key like "owner/repo". */
   source: string;
+  /** Human-readable description of what this assert guards. */
+  description: string;
   /** Pi event name to intercept (e.g. "tool_call"). */
   hook: string;
   /** Optional key-value filter matched against { toolName, ...event.input }. */
@@ -249,6 +251,7 @@ function readSections(
         results.push({
           name,
           source,
+          description: def.description,
           hook: def.hook,
           filter: def.filter,
           when: def.when,

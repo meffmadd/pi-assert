@@ -45,6 +45,7 @@ describe("validate", () => {
       config: {
         local: {
           unmodified: {
+            description: "d",
             hook: "tool_call",
             filter: { toolName: "write" },
             shell: "false",
@@ -59,6 +60,7 @@ describe("validate", () => {
       config: {
         local: {
           "protect-env-files": {
+            description: "d",
             hook: "tool_call",
             filter: { toolName: "write" },
             shell: 'echo "$PI_TOOL_INPUT" | grep -q \'\\.env\' && exit 1 || exit 0',
@@ -73,6 +75,7 @@ describe("validate", () => {
       config: {
         local: {
           "no-secrets-in-env": {
+            description: "d",
             hook: "tool_call",
             filter: { toolName: "bash" },
             shell: 'grep -q SECRET_KEY <<< "$PI_TOOL_INPUT" && exit 1 || exit 0',
@@ -87,6 +90,7 @@ describe("validate", () => {
       config: {
         local: {
           "block-rm-rf": {
+            description: "d",
             hook: "tool_call",
             filter: { toolName: "bash" },
             shell: 'grep -qE \'rm[[:space:]]+-rf\' <<< "$PI_TOOL_INPUT" && exit 1 || exit 0',
@@ -101,6 +105,7 @@ describe("validate", () => {
       config: {
         local: {
           "write-only-in-src": {
+            description: "d",
             hook: "tool_call",
             filter: { toolName: "write" },
             shell: 'echo "$PI_TOOL_INPUT" | grep -q \'"path":"src/\' && exit 0 || exit 1',
@@ -115,6 +120,7 @@ describe("validate", () => {
       config: {
         local: {
           "no-sensitive-reads": {
+            description: "d",
             hook: "tool_call",
             filter: { toolName: "read" },
             shell: 'echo "$PI_TOOL_INPUT" | grep -qE \'\\.(env|pem|key)\' && exit 1 || exit 0',
@@ -129,12 +135,14 @@ describe("validate", () => {
       config: {
         local: {
           "always-active": {
+            description: "d",
             hook: "tool_call",
             filter: { toolName: "write" },
             shell: "false",
             default: true,
           },
           "opt-in": {
+            description: "d",
             hook: "tool_call",
             filter: { toolName: "bash" },
             shell: "false",
@@ -148,14 +156,20 @@ describe("validate", () => {
     // ── Invalid configs ────────────────────────────────────────────
 
     {
+      label: "missing required 'description'",
+      config: { local: { bad: { hook: "tool_call", shell: "true" } } },
+      expected: false,
+    },
+
+    {
       label: "missing required 'hook'",
-      config: { local: { bad: { shell: "true" } } },
+      config: { local: { bad: { description: "d", shell: "true" } } },
       expected: false,
     },
 
     {
       label: "missing required 'shell'",
-      config: { local: { bad: { hook: "tool_call" } } },
+      config: { local: { bad: { description: "d", hook: "tool_call" } } },
       expected: false,
     },
 
@@ -164,6 +178,7 @@ describe("validate", () => {
       config: {
         local: {
           bad: {
+            description: "d",
             hook: "tool_call",
             shell: "true",
             extraProp: "should not be here",
@@ -175,14 +190,14 @@ describe("validate", () => {
 
     {
       label: "hook value not in enum",
-      config: { local: { bad: { hook: "invalid_hook", shell: "true" } } },
+      config: { local: { bad: { description: "d", hook: "invalid_hook", shell: "true" } } },
       expected: false,
     },
 
     {
       label: "default is not boolean",
       config: {
-        local: { bad: { hook: "tool_call", shell: "true", default: "yes" } },
+        local: { bad: { description: "d", hook: "tool_call", shell: "true", default: "yes" } },
       },
       expected: false,
     },
@@ -209,7 +224,7 @@ describe("validate", () => {
 
     {
       label: "accepts local section with valid asserts",
-      config: { local: { guard: { hook: "tool_call", shell: "true" } } },
+      config: { local: { guard: { description: "d", hook: "tool_call", shell: "true" } } },
       expected: true,
     },
 
@@ -217,7 +232,7 @@ describe("validate", () => {
       label: "accepts repo section with valid asserts",
       config: {
         "meffmadd/pi-assert-rules": {
-          "block-write": { hook: "tool_call", shell: "false" },
+          "block-write": { description: "d", hook: "tool_call", shell: "false" },
         },
       },
       expected: true,
@@ -226,8 +241,8 @@ describe("validate", () => {
     {
       label: "accepts mixed local and repo sections",
       config: {
-        local: { custom: { hook: "tool_call", shell: "true" } },
-        "some/repo": { installed: { hook: "tool_call", shell: "false" } },
+        local: { custom: { description: "d", hook: "tool_call", shell: "true" } },
+        "some/repo": { installed: { description: "d", hook: "tool_call", shell: "false" } },
       },
       expected: true,
     },
@@ -236,7 +251,7 @@ describe("validate", () => {
       label: "accepts $schema alongside sections",
       config: {
         $schema: "https://example.com/schema.json",
-        local: { guard: { hook: "tool_call", shell: "true" } },
+        local: { guard: { description: "d", hook: "tool_call", shell: "true" } },
       },
       expected: true,
     },
@@ -245,9 +260,9 @@ describe("validate", () => {
       label: "accepts repos array with valid entries",
       config: {
         repos: ["meffmadd/pi-assert-rules"],
-        local: { guard: { hook: "tool_call", shell: "true" } },
+        local: { guard: { description: "d", hook: "tool_call", shell: "true" } },
         "meffmadd/pi-assert-rules": {
-          block: { hook: "tool_call", shell: "false" },
+          block: { description: "d", hook: "tool_call", shell: "false" },
         },
       },
       expected: true,
@@ -275,13 +290,13 @@ describe("validate", () => {
 
     {
       label: "accepts 'tool_call' as hook",
-      config: { local: { guard: { hook: "tool_call", shell: "true" } } },
+      config: { local: { guard: { description: "d", hook: "tool_call", shell: "true" } } },
       expected: true,
     },
 
     {
       label: "accepts 'tool_result' as hook",
-      config: { local: { guard: { hook: "tool_result", shell: "true" } } },
+      config: { local: { guard: { description: "d", hook: "tool_result", shell: "true" } } },
       expected: true,
     },
 
@@ -290,6 +305,7 @@ describe("validate", () => {
       config: {
         local: {
           "block-secrets-in-reads": {
+            description: "d",
             hook: "tool_result",
             filter: { toolName: "read" },
             shell: "grep -qE 'SECRET' <<< \"$PI_TOOL_RESULT\" && exit 1 || exit 0",
@@ -303,13 +319,13 @@ describe("validate", () => {
 
     {
       label: "rejects 'session_shutdown' as hook (not in enum)",
-      config: { local: { guard: { hook: "session_shutdown", shell: "true" } } },
+      config: { local: { guard: { description: "d", hook: "session_shutdown", shell: "true" } } },
       expected: false,
     },
 
     {
       label: "accepts 'agent_end' as hook",
-      config: { local: { guard: { hook: "agent_end", shell: "true" } } },
+      config: { local: { guard: { description: "d", hook: "agent_end", shell: "true" } } },
       expected: true,
     },
 
@@ -318,6 +334,7 @@ describe("validate", () => {
       config: {
         local: {
           "check-git-clean": {
+            description: "d",
             hook: "agent_end",
             shell: "git diff --quiet",
             when: "test -d .git",

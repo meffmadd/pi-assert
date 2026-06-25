@@ -82,6 +82,7 @@ describe("loadAsserts", () => {
       projectJson: {
         local: {
           unmodified: {
+            description: "d",
             hook: "tool_call",
             filter: { toolName: "write" },
             shell: "false",
@@ -92,6 +93,7 @@ describe("loadAsserts", () => {
         {
           name: "unmodified",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: { toolName: "write" },
           when: undefined,
@@ -107,6 +109,7 @@ describe("loadAsserts", () => {
       globalJson: {
         local: {
           "no-secrets": {
+            description: "d",
             hook: "tool_call",
             filter: { toolName: "bash" },
             shell: 'grep -q SECRET <<< "$PI_TOOL_INPUT" && exit 1 || exit 0',
@@ -117,6 +120,7 @@ describe("loadAsserts", () => {
         {
           name: "no-secrets",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: { toolName: "bash" },
           when: undefined,
@@ -132,6 +136,7 @@ describe("loadAsserts", () => {
       projectJson: {
         local: {
           "no-secrets": {
+            description: "d",
             hook: "tool_call",
             filter: { toolName: "bash" },
             shell: "exit 0",
@@ -141,11 +146,13 @@ describe("loadAsserts", () => {
       globalJson: {
         local: {
           "no-secrets": {
+            description: "d",
             hook: "tool_call",
             filter: { toolName: "bash" },
             shell: "grep -q SECRET",
           },
           "global-only": {
+            description: "d",
             hook: "tool_call",
             shell: "false",
           },
@@ -155,6 +162,7 @@ describe("loadAsserts", () => {
         {
           name: "no-secrets",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: { toolName: "bash" },
           when: undefined,
@@ -164,6 +172,7 @@ describe("loadAsserts", () => {
         {
           name: "global-only",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -178,9 +187,9 @@ describe("loadAsserts", () => {
       label: "invalid entries = silently skipped",
       projectJson: {
         local: {
-          "valid-one": { hook: "tool_call", shell: "true" },
+          "valid-one": { description: "d", hook: "tool_call", shell: "true" },
           "no-hook": { shell: "true" },
-          "no-shell": { hook: "tool_call" },
+          "no-shell": { description: "d", hook: "tool_call" },
           "null-val": null,
         },
       } as Record<string, unknown>,
@@ -188,6 +197,7 @@ describe("loadAsserts", () => {
         {
           name: "valid-one",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -202,7 +212,7 @@ describe("loadAsserts", () => {
       projectJson: {
         local: {
           x: { shell: "true" },
-          y: { hook: "tool_call" },
+          y: { description: "d", hook: "tool_call" },
         },
       },
       expected: [],
@@ -221,6 +231,7 @@ describe("loadAsserts", () => {
       projectJson: {
         local: {
           "catch-all": {
+            description: "d",
             hook: "tool_call",
             shell: "false",
           },
@@ -230,6 +241,7 @@ describe("loadAsserts", () => {
         {
           name: "catch-all",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -245,6 +257,7 @@ describe("loadAsserts", () => {
       projectJson: {
         local: {
           guard: {
+            description: "d",
             hook: "tool_call",
             shell: "false",
             default: true,
@@ -255,6 +268,7 @@ describe("loadAsserts", () => {
         {
           name: "guard",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -270,6 +284,7 @@ describe("loadAsserts", () => {
       projectJson: {
         local: {
           guard: {
+            description: "d",
             hook: "tool_call",
             shell: "false",
             default: false,
@@ -280,6 +295,7 @@ describe("loadAsserts", () => {
         {
           name: "guard",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -295,6 +311,7 @@ describe("loadAsserts", () => {
       projectJson: {
         local: {
           guard: {
+            description: "d",
             hook: "tool_call",
             shell: "false",
           },
@@ -304,6 +321,7 @@ describe("loadAsserts", () => {
         {
           name: "guard",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -318,15 +336,16 @@ describe("loadAsserts", () => {
       label: "mixed defaults → each assert gets its own default value",
       projectJson: {
         local: {
-          active: { hook: "tool_call", shell: "false", default: true },
-          inactive: { hook: "tool_call", shell: "true", default: false },
-          unspecified: { hook: "tool_call", shell: "true" },
+          active: { description: "d", hook: "tool_call", shell: "false", default: true },
+          inactive: { description: "d", hook: "tool_call", shell: "true", default: false },
+          unspecified: { description: "d", hook: "tool_call", shell: "true" },
         },
       },
       expected: [
         {
           name: "active",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -336,6 +355,7 @@ describe("loadAsserts", () => {
         {
           name: "inactive",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -345,6 +365,7 @@ describe("loadAsserts", () => {
         {
           name: "unspecified",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -360,6 +381,7 @@ describe("loadAsserts", () => {
       projectJson: {
         local: {
           conditional: {
+            description: "d",
             hook: "tool_call",
             shell: "false",
             when: '[ "$PI_TOOL_NAME" = write ]',
@@ -370,6 +392,7 @@ describe("loadAsserts", () => {
         {
           name: "conditional",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: '[ "$PI_TOOL_NAME" = write ]',
@@ -384,6 +407,7 @@ describe("loadAsserts", () => {
       projectJson: {
         local: {
           simple: {
+            description: "d",
             hook: "tool_call",
             shell: "true",
           },
@@ -393,6 +417,7 @@ describe("loadAsserts", () => {
         {
           name: "simple",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -407,6 +432,7 @@ describe("loadAsserts", () => {
       projectJson: {
         local: {
           guarded: {
+            description: "d",
             hook: "tool_call",
             filter: { toolName: "bash" },
             when: "true",
@@ -418,6 +444,7 @@ describe("loadAsserts", () => {
         {
           name: "guarded",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: { toolName: "bash" },
           when: "true",
@@ -433,6 +460,7 @@ describe("loadAsserts", () => {
       projectJson: {
         local: {
           "check-git-clean": {
+            description: "d",
             hook: "agent_end",
             shell: "git diff --quiet",
             default: true,
@@ -443,6 +471,7 @@ describe("loadAsserts", () => {
         {
           name: "check-git-clean",
           source: "local",
+          description: "d",
           hook: "agent_end",
           filter: undefined,
           when: undefined,
@@ -457,6 +486,7 @@ describe("loadAsserts", () => {
       projectJson: {
         local: {
           "check-tests": {
+            description: "d",
             hook: "agent_end",
             filter: { event: "agent_end" },
             when: "test -d tests",
@@ -469,6 +499,7 @@ describe("loadAsserts", () => {
         {
           name: "check-tests",
           source: "local",
+          description: "d",
           hook: "agent_end",
           filter: { event: "agent_end" },
           when: "test -d tests",
@@ -484,11 +515,13 @@ describe("loadAsserts", () => {
       projectJson: {
         local: {
           "tool-guard": {
+            description: "d",
             hook: "tool_call",
             filter: { toolName: "write" },
             shell: "false",
           },
           "end-guard": {
+            description: "d",
             hook: "agent_end",
             shell: "git diff --quiet",
             default: true,
@@ -499,6 +532,7 @@ describe("loadAsserts", () => {
         {
           name: "tool-guard",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: { toolName: "write" },
           when: undefined,
@@ -508,6 +542,7 @@ describe("loadAsserts", () => {
         {
           name: "end-guard",
           source: "local",
+          description: "d",
           hook: "agent_end",
           filter: undefined,
           when: undefined,
@@ -522,15 +557,16 @@ describe("loadAsserts", () => {
       label: "multiple valid asserts → all loaded",
       projectJson: {
         local: {
-          a: { hook: "tool_call", shell: "true" },
-          b: { hook: "tool_call", filter: { toolName: "read" }, shell: "false" },
-          c: { hook: "tool_call", filter: { toolName: "bash" }, shell: "grep x" },
+          a: { description: "d", hook: "tool_call", shell: "true" },
+          b: { description: "d", hook: "tool_call", filter: { toolName: "read" }, shell: "false" },
+          c: { description: "d", hook: "tool_call", filter: { toolName: "bash" }, shell: "grep x" },
         },
       },
       expected: [
         {
           name: "a",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -540,6 +576,7 @@ describe("loadAsserts", () => {
         {
           name: "b",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: { toolName: "read" },
           when: undefined,
@@ -549,6 +586,7 @@ describe("loadAsserts", () => {
         {
           name: "c",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: { toolName: "bash" },
           when: undefined,
@@ -563,16 +601,17 @@ describe("loadAsserts", () => {
       label: "multiple sections → all loaded with correct source",
       projectJson: {
         local: {
-          "my-rule": { hook: "tool_call", shell: "false" },
+          "my-rule": { description: "d", hook: "tool_call", shell: "false" },
         },
         "meffmadd/pi-assert-rules": {
-          "block-write": { hook: "tool_call", shell: "false" },
+          "block-write": { description: "d", hook: "tool_call", shell: "false" },
         },
       },
       expected: [
         {
           name: "my-rule",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -582,6 +621,7 @@ describe("loadAsserts", () => {
         {
           name: "block-write",
           source: "meffmadd/pi-assert-rules",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -597,13 +637,14 @@ describe("loadAsserts", () => {
       projectJson: {
         $schema: "https://example.com/schema.json",
         local: {
-          "my-rule": { hook: "tool_call", shell: "false" },
+          "my-rule": { description: "d", hook: "tool_call", shell: "false" },
         },
       },
       expected: [
         {
           name: "my-rule",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -618,19 +659,20 @@ describe("loadAsserts", () => {
       label: "project repo overrides global repo by source+name",
       projectJson: {
         "meffmadd/pi-assert-rules": {
-          "block-write": { hook: "tool_call", shell: "exit 1" },
+          "block-write": { description: "d", hook: "tool_call", shell: "exit 1" },
         },
       },
       globalJson: {
         "meffmadd/pi-assert-rules": {
-          "block-write": { hook: "tool_call", shell: "false" },
-          "other-rule": { hook: "tool_call", shell: "true" },
+          "block-write": { description: "d", hook: "tool_call", shell: "false" },
+          "other-rule": { description: "d", hook: "tool_call", shell: "true" },
         },
       },
       expected: [
         {
           name: "block-write",
           source: "meffmadd/pi-assert-rules",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -640,6 +682,7 @@ describe("loadAsserts", () => {
         {
           name: "other-rule",
           source: "meffmadd/pi-assert-rules",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -654,16 +697,17 @@ describe("loadAsserts", () => {
       label: "same name, different source → both loaded",
       projectJson: {
         local: {
-          guard: { hook: "tool_call", shell: "false" },
+          guard: { description: "d", hook: "tool_call", shell: "false" },
         },
         "other/repo": {
-          guard: { hook: "tool_call", shell: "true" },
+          guard: { description: "d", hook: "tool_call", shell: "true" },
         },
       },
       expected: [
         {
           name: "guard",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -673,6 +717,7 @@ describe("loadAsserts", () => {
         {
           name: "guard",
           source: "other/repo",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -688,13 +733,14 @@ describe("loadAsserts", () => {
       projectJson: {
         local: {},
         "other/repo": {
-          rule: { hook: "tool_call", shell: "true" },
+          rule: { description: "d", hook: "tool_call", shell: "true" },
         },
       },
       expected: [
         {
           name: "rule",
           source: "other/repo",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -709,7 +755,7 @@ describe("loadAsserts", () => {
       label: "non-object top-level values → skipped",
       projectJson: {
         local: {
-          guard: { hook: "tool_call", shell: "true" },
+          guard: { description: "d", hook: "tool_call", shell: "true" },
         },
         bad: "not an object",
       } as Record<string, unknown>,
@@ -717,6 +763,7 @@ describe("loadAsserts", () => {
         {
           name: "guard",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -731,14 +778,15 @@ describe("loadAsserts", () => {
       label: "repos array → only declared repo sections load",
       projectJson: {
         repos: ["repo/a"],
-        local: { guard: { hook: "tool_call", shell: "true" } },
-        "repo/a": { rule1: { hook: "tool_call", shell: "true" } },
-        "repo/b": { rule2: { hook: "tool_call", shell: "true" } },
+        local: { guard: { description: "d", hook: "tool_call", shell: "true" } },
+        "repo/a": { rule1: { description: "d", hook: "tool_call", shell: "true" } },
+        "repo/b": { rule2: { description: "d", hook: "tool_call", shell: "true" } },
       },
       expected: [
         {
           name: "guard",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -748,6 +796,7 @@ describe("loadAsserts", () => {
         {
           name: "rule1",
           source: "repo/a",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -761,14 +810,15 @@ describe("loadAsserts", () => {
     {
       label: "missing repos → all object sections loaded",
       projectJson: {
-        local: { guard: { hook: "tool_call", shell: "true" } },
-        "repo/a": { rule1: { hook: "tool_call", shell: "true" } },
-        "repo/b": { rule2: { hook: "tool_call", shell: "true" } },
+        local: { guard: { description: "d", hook: "tool_call", shell: "true" } },
+        "repo/a": { rule1: { description: "d", hook: "tool_call", shell: "true" } },
+        "repo/b": { rule2: { description: "d", hook: "tool_call", shell: "true" } },
       },
       expected: [
         {
           name: "guard",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -778,6 +828,7 @@ describe("loadAsserts", () => {
         {
           name: "rule1",
           source: "repo/a",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -787,6 +838,7 @@ describe("loadAsserts", () => {
         {
           name: "rule2",
           source: "repo/b",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -801,12 +853,13 @@ describe("loadAsserts", () => {
       label: "repos key is not treated as a section",
       projectJson: {
         repos: ["repo/a"],
-        local: { guard: { hook: "tool_call", shell: "true" } },
+        local: { guard: { description: "d", hook: "tool_call", shell: "true" } },
       },
       expected: [
         {
           name: "guard",
           source: "local",
+          description: "d",
           hook: "tool_call",
           filter: undefined,
           when: undefined,
@@ -869,7 +922,7 @@ describe("loadAsserts", () => {
     writeFileSync(
       join(dir, ".pi", "asserts.json"),
       JSON.stringify({
-        local: { guard: { hook: "tool_call", shell: "true" } },
+        local: { guard: { description: "d", hook: "tool_call", shell: "true" } },
       }),
     );
 
@@ -895,7 +948,7 @@ describe("loadAsserts", () => {
     writeFileSync(
       join(tmpRoot, ".pi", "asserts.json"),
       JSON.stringify({
-        local: { "global-rule": { hook: "tool_call", shell: "true" } },
+        local: { "global-rule": { description: "d", hook: "tool_call", shell: "true" } },
       }),
     );
 
@@ -977,7 +1030,7 @@ describe("loadAsserts — Assert.path provenance", () => {
     writeFileSync(
       projectPath(dir),
       JSON.stringify({
-        local: { guard: { hook: "tool_call", shell: "false" } },
+        local: { guard: { description: "d", hook: "tool_call", shell: "false" } },
       }),
     );
 
@@ -989,7 +1042,7 @@ describe("loadAsserts — Assert.path provenance", () => {
   it("global-only entry carries the global file path", () => {
     clearGlobal();
     makeGlobal({
-      local: { "g-rule": { hook: "tool_call", shell: "true" } },
+      local: { "g-rule": { description: "d", hook: "tool_call", shell: "true" } },
     });
     const dir = join(tmpRoot, "path-global-only");
     mkdirSync(dir, { recursive: true });
@@ -1003,8 +1056,8 @@ describe("loadAsserts — Assert.path provenance", () => {
     clearGlobal();
     makeGlobal({
       local: {
-        shared: { hook: "tool_call", shell: "global-shell" },
-        "g-only": { hook: "tool_call", shell: "g" },
+        shared: { description: "d", hook: "tool_call", shell: "global-shell" },
+        "g-only": { description: "d", hook: "tool_call", shell: "g" },
       },
     });
     const dir = join(tmpRoot, "path-override");
@@ -1013,7 +1066,7 @@ describe("loadAsserts — Assert.path provenance", () => {
       projectPath(dir),
       JSON.stringify({
         local: {
-          shared: { hook: "tool_call", shell: "project-shell" },
+          shared: { description: "d", hook: "tool_call", shell: "project-shell" },
         },
       }),
     );
@@ -1034,7 +1087,7 @@ describe("loadAsserts — Assert.path provenance", () => {
       JSON.stringify({
         $schema: "https://example.com/schema.json",
         repos: ["owner/repo"],
-        local: { rule: { hook: "tool_call", shell: "true" } },
+        local: { rule: { description: "d", hook: "tool_call", shell: "true" } },
       }),
     );
 
@@ -1051,8 +1104,8 @@ describe("loadAsserts — Assert.path provenance", () => {
     writeFileSync(
       projectPath(dir),
       JSON.stringify({
-        local: { guard: { hook: "tool_call", shell: "false" } },
-        "other/repo": { guard: { hook: "tool_call", shell: "true" } },
+        local: { guard: { description: "d", hook: "tool_call", shell: "false" } },
+        "other/repo": { guard: { description: "d", hook: "tool_call", shell: "true" } },
       }),
     );
 

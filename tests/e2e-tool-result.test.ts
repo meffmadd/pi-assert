@@ -103,6 +103,7 @@ describe("e2e: tool_result orchestration", () => {
   it("single assert with matching filter → patch replaces content", async () => {
     const cwd = setupConfig("e2e-tr-secret-leak", {
       "no-secrets-in-reads": {
+        description: "d",
         hook: "tool_result",
         filter: { toolName: "read" },
         shell:
@@ -139,6 +140,7 @@ describe("e2e: tool_result orchestration", () => {
   it("filter on toolName doesn't match → assert skipped, no patch", async () => {
     const cwd = setupConfig("e2e-tr-filter-miss", {
       "no-secrets-in-reads": {
+        description: "d",
         hook: "tool_result",
         filter: { toolName: "read" },
         shell: "false",
@@ -158,6 +160,7 @@ describe("e2e: tool_result orchestration", () => {
   it("shell passes (exit 0) → no patch", async () => {
     const cwd = setupConfig("e2e-tr-pass", {
       "allow-all-reads": {
+        description: "d",
         hook: "tool_result",
         filter: { toolName: "read" },
         shell: "true",
@@ -176,10 +179,12 @@ describe("e2e: tool_result orchestration", () => {
   it("fail-fast: first matching assert blocks, second never runs", async () => {
     const cwd = setupConfig("e2e-tr-failfast", {
       "block-all": {
+        description: "d",
         hook: "tool_result",
         shell: "false",
       },
       "allow-read": {
+        description: "d",
         hook: "tool_result",
         filter: { toolName: "read" },
         shell: "true",
@@ -203,6 +208,7 @@ describe("e2e: tool_result orchestration", () => {
   it("blocks .env-style content in read results", async () => {
     const cwd = setupConfig("e2e-tr-env-leak", {
       "block-env-reads": {
+        description: "d",
         hook: "tool_result",
         filter: { toolName: "read", path: "/app/.env" },
         shell: "grep -qE '^[A-Z_]+=' <<< \"$PI_TOOL_RESULT\" && exit 1 || exit 0",
@@ -240,6 +246,7 @@ describe("e2e: tool_result orchestration", () => {
   it("blocks PEM private key blocks in any tool result", async () => {
     const cwd = setupConfig("e2e-tr-pem", {
       "no-pem-blocks": {
+        description: "d",
         hook: "tool_result",
         // Use `grep --` so a leading `-` in the pattern is not parsed as
         // a flag, and use `-e` to make the pattern explicit.
@@ -267,8 +274,8 @@ describe("e2e: tool_result orchestration", () => {
 
   it("asserts with non-tool_result hook are skipped", async () => {
     const asserts: Assert[] = [
-      { name: "tool-call-guard", source: "local", hook: "tool_call", filter: {}, shell: "false", default: false },
-      { name: "agent-end-guard", source: "local", hook: "agent_end", filter: {}, shell: "false", default: false },
+      { name: "tool-call-guard", source: "local", description: "d", hook: "tool_call", filter: {}, shell: "false", default: false },
+      { name: "agent-end-guard", source: "local", description: "d", hook: "agent_end", filter: {}, shell: "false", default: false },
     ];
 
     const event = makeReadResult("anything");
@@ -281,6 +288,7 @@ describe("e2e: tool_result orchestration", () => {
   it("when passes → main shell runs and can patch", async () => {
     const cwd = setupConfig("e2e-tr-when-pass", {
       "conditional-guard": {
+        description: "d",
         hook: "tool_result",
         when: "true",
         shell: "false",
@@ -298,6 +306,7 @@ describe("e2e: tool_result orchestration", () => {
   it("when fails → assert skipped entirely (no patch)", async () => {
     const cwd = setupConfig("e2e-tr-when-fail", {
       "only-on-errors": {
+        description: "d",
         hook: "tool_result",
         when: "false",
         shell: "false",
@@ -316,6 +325,7 @@ describe("e2e: tool_result orchestration", () => {
   it("shell sees all text content joined by newlines", async () => {
     const cwd = setupConfig("e2e-tr-multi-content", {
       "check-multi": {
+        description: "d",
         hook: "tool_result",
         shell: "grep -q 'SECRET' <<< \"$PI_TOOL_RESULT\" && exit 1 || exit 0",
       },
@@ -345,6 +355,7 @@ describe("e2e: tool_result orchestration", () => {
   it("isError: true in event flows into PI_TOOL_IS_ERROR", async () => {
     const cwd = setupConfig("e2e-tr-iserror", {
       "check-iserror": {
+        description: "d",
         hook: "tool_result",
         // Block any result that came from an erroring tool
         shell: "test \"$PI_TOOL_IS_ERROR\" = 'true' && exit 1 || exit 0",
@@ -381,12 +392,14 @@ describe("e2e: tool_result orchestration", () => {
   it("only asserts with default:true are active for new sessions", async () => {
     const cwd = setupConfig("e2e-tr-defaults", {
       "always-active": {
+        description: "d",
         hook: "tool_result",
         filter: { toolName: "read" },
         shell: "false",
         default: true,
       },
       "opt-in": {
+        description: "d",
         hook: "tool_result",
         filter: { toolName: "read" },
         shell: "false",
@@ -417,6 +430,7 @@ describe("e2e: tool_result orchestration", () => {
   it("patch.isError is true on failure regardless of original isError", async () => {
     const cwd = setupConfig("e2e-tr-patch-iserror", {
       "always-block": {
+        description: "d",
         hook: "tool_result",
         shell: "false",
       },
@@ -443,6 +457,7 @@ describe("e2e: tool_result orchestration", () => {
   it("patch content includes assert name, tool name, and shell command", async () => {
     const cwd = setupConfig("e2e-tr-patch-content", {
       "secret-guard": {
+        description: "d",
         hook: "tool_result",
         filter: { toolName: "read" },
         shell: "grep -q 'TOKEN' <<< \"$PI_TOOL_RESULT\" && exit 1 || exit 0",
@@ -468,6 +483,7 @@ describe("e2e: tool_result orchestration", () => {
   it("patch includes event.details when defined (pass-through)", async () => {
     const cwd = setupConfig("e2e-tr-details-defined", {
       "block-all": {
+        description: "d",
         hook: "tool_result",
         shell: "false",
       },
@@ -496,6 +512,7 @@ describe("e2e: tool_result orchestration", () => {
   it("patch.details is undefined when event.details is undefined", async () => {
     const cwd = setupConfig("e2e-tr-details-undef", {
       "block-all": {
+        description: "d",
         hook: "tool_result",
         shell: "false",
       },
@@ -525,6 +542,7 @@ describe("e2e: tool_result orchestration", () => {
   it("special characters (newlines) in PI_TOOL_RESULT are preserved", async () => {
     const cwd = setupConfig("e2e-tr-special-newlines", {
       "find-secret": {
+        description: "d",
         hook: "tool_result",
         shell: "grep -q 'SECRET=hunter2' <<< \"$PI_TOOL_RESULT\" && exit 1 || exit 0",
       },
@@ -546,6 +564,7 @@ describe("e2e: tool_result orchestration", () => {
   it("special characters (quotes, backslashes, $vars) in result are handled by shell", async () => {
     const cwd = setupConfig("e2e-tr-special-quoting", {
       "find-dangerous": {
+        description: "d",
         hook: "tool_result",
         // Look for a string that contains $() command-substitution
         shell: "grep -qF '$(rm -rf' <<< \"$PI_TOOL_RESULT\" && exit 1 || exit 0",
@@ -567,6 +586,7 @@ describe("e2e: tool_result orchestration", () => {
   it("special characters (tabs, unicode) in result are preserved through env", async () => {
     const cwd = setupConfig("e2e-tr-special-tabs", {
       "find-tab": {
+        description: "d",
         hook: "tool_result",
         // Tab-separated key-value
         shell: "grep -qF $'KEY\\tvalue' <<< \"$PI_TOOL_RESULT\" && exit 1 || exit 0",

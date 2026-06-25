@@ -32,8 +32,12 @@
   "$defs": {
     "assert": {
       "type": "object",
-      "required": ["hook", "shell"],
+      "required": ["description", "hook", "shell"],
       "properties": {
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of what this assert guards. Required."
+        },
         "hook": {
           "type": "string",
           "enum": ["tool_call", "tool_result", "agent_end"],

@@ -90,6 +90,7 @@ describe("e2e: orchestration", () => {
   it("single assert with matching filter → block", async () => {
     const cwd = setupConfig("e2e-single-block", {
       "block-writes": {
+        description: "d",
         hook: "tool_call",
         filter: { toolName: "write" },
         shell: "false",
@@ -124,11 +125,13 @@ describe("e2e: orchestration", () => {
   it("fail-fast: first matching assert blocks, second never runs", async () => {
     const cwd = setupConfig("e2e-failfast", {
       "block-all": {
+        description: "d",
         hook: "tool_call",
         filter: {},
         shell: "false",
       },
       "allow-read": {
+        description: "d",
         hook: "tool_call",
         filter: { toolName: "read" },
         shell: "true",
@@ -155,6 +158,7 @@ describe("e2e: orchestration", () => {
   it("no filter → fires on every tool_call", async () => {
     const cwd = setupConfig("e2e-no-filter", {
       "block-everything": {
+        description: "d",
         hook: "tool_call",
         shell: "false",
       },
@@ -180,6 +184,7 @@ describe("e2e: orchestration", () => {
   it("filter on input field + shell grep → only matching commands blocked", async () => {
     const cwd = setupConfig("e2e-content-check", {
       "no-delete-pods": {
+        description: "d",
         hook: "tool_call",
         filter: { toolName: "bash" },
         shell: 'grep -q "kubectl.*delete.*pod" <<< "$PI_TOOL_INPUT" && exit 1 || exit 0',
@@ -222,6 +227,7 @@ describe("e2e: orchestration", () => {
   it("shell passes (exit 0) → tool allowed", async () => {
     const cwd = setupConfig("e2e-allow", {
       "allow-all": {
+        description: "d",
         hook: "tool_call",
         filter: { toolName: "bash" },
         shell: "true",
@@ -244,8 +250,8 @@ describe("e2e: orchestration", () => {
   it("asserts with non-tool_call hook are skipped", async () => {
     // Simulate what would happen if we had other hook types
     const asserts: Assert[] = [
-      { name: "future-hook", source: "local", hook: "tool_result", filter: {}, shell: "false", default: false },
-      { name: "blocker", source: "local", hook: "tool_call", filter: {}, shell: "true", default: false },
+      { name: "future-hook", source: "local", description: "d", hook: "tool_result", filter: {}, shell: "false", default: false },
+      { name: "blocker", source: "local", description: "d", hook: "tool_call", filter: {}, shell: "true", default: false },
     ];
 
     const event: ToolCallEvent = {
@@ -265,18 +271,21 @@ describe("e2e: orchestration", () => {
   it("only asserts with default:true are active for new sessions", async () => {
     const cwd = setupConfig("e2e-defaults", {
       "always-active": {
+        description: "d",
         hook: "tool_call",
         filter: { toolName: "write" },
         shell: "false",
         default: true,
       },
       "opt-in": {
+        description: "d",
         hook: "tool_call",
         filter: { toolName: "bash" },
         shell: "false",
         default: false,
       },
       "also-opt-in": {
+        description: "d",
         hook: "tool_call",
         filter: { toolName: "read" },
         shell: "false",
@@ -338,6 +347,7 @@ describe("e2e: orchestration", () => {
   it("when passes → main shell runs and can block", async () => {
     const cwd = setupConfig("e2e-when-pass", {
       "conditional-guard": {
+        description: "d",
         hook: "tool_call",
         when: "true",
         shell: "false",
@@ -361,6 +371,7 @@ describe("e2e: orchestration", () => {
   it("when passes → main shell passes → allowed", async () => {
     const cwd = setupConfig("e2e-when-both-pass", {
       "always-ok": {
+        description: "d",
         hook: "tool_call",
         when: "true",
         shell: "true",
@@ -385,6 +396,7 @@ describe("e2e: orchestration", () => {
   it("when fails → assert skipped entirely (no block)", async () => {
     const cwd = setupConfig("e2e-when-fail", {
       "only-for-write": {
+        description: "d",
         hook: "tool_call",
         when: '[ "$PI_TOOL_NAME" = write ]',
         shell: "false",
@@ -416,11 +428,13 @@ describe("e2e: orchestration", () => {
   it("when fails → second assert still runs (fail-fast on main shell only)", async () => {
     const cwd = setupConfig("e2e-when-fail-continue", {
       "skip-on-bash": {
+        description: "d",
         hook: "tool_call",
         when: '[ "$PI_TOOL_NAME" = write ]',
         shell: "false",
       },
       "block-all": {
+        description: "d",
         hook: "tool_call",
         shell: "false",
       },
@@ -445,6 +459,7 @@ describe("e2e: orchestration", () => {
   it("when receives the same env vars as shell", async () => {
     const cwd = setupConfig("e2e-when-env", {
       "expensive-check": {
+        description: "d",
         hook: "tool_call",
         when: '[ "$PI_TOOL_NAME" = write ] && [ -n "$PI_TOOL_INPUT" ]',
         shell: "echo \"$PI_TOOL_INPUT\" | grep -q '\.env' && exit 1 || exit 0",
@@ -487,6 +502,7 @@ describe("e2e: orchestration", () => {
   it("assert with filter and when → both must match before shell runs", async () => {
     const cwd = setupConfig("e2e-filter-and-if", {
       "guard-write-env": {
+        description: "d",
         hook: "tool_call",
         filter: { toolName: "write" },
         when: "echo \"$PI_TOOL_INPUT\" | grep -q '\.env'",
@@ -528,6 +544,7 @@ describe("e2e: orchestration", () => {
   it("ctx.signal aborts shell → blocked", async () => {
     const cwd = setupConfig("e2e-signal", {
       "slow-check": {
+        description: "d",
         hook: "tool_call",
         filter: {},
         shell: "sleep 10",
@@ -575,6 +592,7 @@ describe("e2e: agent_end orchestration", () => {
   it("single agent_end assert with matching filter → failure recorded", async () => {
     const cwd = setupConfig("e2e-ae-single-fail", {
       "check-clean": {
+        description: "d",
         hook: "agent_end",
         filter: { event: "agent_end" },
         shell: "false",
@@ -595,11 +613,13 @@ describe("e2e: agent_end orchestration", () => {
   it("no fail-fast: all matching failures collected", async () => {
     const cwd = setupConfig("e2e-ae-no-failfast", {
       "check-a": {
+        description: "d",
         hook: "agent_end",
         filter: { event: "agent_end" },
         shell: "false",
       },
       "check-b": {
+        description: "d",
         hook: "agent_end",
         filter: { event: "agent_end" },
         shell: "exit 1",
@@ -620,6 +640,7 @@ describe("e2e: agent_end orchestration", () => {
   it("no filter → fires on every agent_end", async () => {
     const cwd = setupConfig("e2e-ae-no-filter", {
       "always-run": {
+        description: "d",
         hook: "agent_end",
         shell: "false",
       },
@@ -637,6 +658,7 @@ describe("e2e: agent_end orchestration", () => {
   it("shell passes (exit 0) → no failure", async () => {
     const cwd = setupConfig("e2e-ae-pass", {
       "always-ok": {
+        description: "d",
         hook: "agent_end",
         shell: "true",
       },
@@ -652,8 +674,8 @@ describe("e2e: agent_end orchestration", () => {
 
   it("asserts with non-agent_end hook are skipped", async () => {
     const asserts: Assert[] = [
-      { name: "tool-check", source: "local", hook: "tool_call", filter: {}, shell: "false", default: false },
-      { name: "end-check", source: "local", hook: "agent_end", filter: {}, shell: "true", default: false },
+      { name: "tool-check", source: "local", description: "d", hook: "tool_call", filter: {}, shell: "false", default: false },
+      { name: "end-check", source: "local", description: "d", hook: "agent_end", filter: {}, shell: "true", default: false },
     ];
 
     const failures = await executeAgentEndAsserts(asserts, agentEndEvent, defaultCtx);
@@ -665,16 +687,19 @@ describe("e2e: agent_end orchestration", () => {
   it("only asserts with default:true are active for new sessions", async () => {
     const cwd = setupConfig("e2e-ae-defaults", {
       "always-active": {
+        description: "d",
         hook: "agent_end",
         shell: "false",
         default: true,
       },
       "opt-in": {
+        description: "d",
         hook: "agent_end",
         shell: "false",
         default: false,
       },
       "also-opt-in": {
+        description: "d",
         hook: "agent_end",
         shell: "false",
       },
@@ -703,6 +728,7 @@ describe("e2e: agent_end orchestration", () => {
   it("when passes → main shell runs and can fail", async () => {
     const cwd = setupConfig("e2e-ae-when-pass", {
       "conditional-guard": {
+        description: "d",
         hook: "agent_end",
         when: "true",
         shell: "false",
@@ -719,6 +745,7 @@ describe("e2e: agent_end orchestration", () => {
   it("when passes → main shell passes → no failure", async () => {
     const cwd = setupConfig("e2e-ae-when-both-pass", {
       "always-ok": {
+        description: "d",
         hook: "agent_end",
         when: "true",
         shell: "true",
@@ -736,6 +763,7 @@ describe("e2e: agent_end orchestration", () => {
   it("when fails → assert skipped entirely (no failure)", async () => {
     const cwd = setupConfig("e2e-ae-when-fail", {
       "only-in-git": {
+        description: "d",
         hook: "agent_end",
         when: "false",
         shell: "false",
@@ -751,11 +779,13 @@ describe("e2e: agent_end orchestration", () => {
   it("when fails → second assert still runs (no fail-fast on when)", async () => {
     const cwd = setupConfig("e2e-ae-when-fail-continue", {
       "skip-me": {
+        description: "d",
         hook: "agent_end",
         when: "false",
         shell: "false",
       },
       "always-fail": {
+        description: "d",
         hook: "agent_end",
         shell: "false",
       },
@@ -773,6 +803,7 @@ describe("e2e: agent_end orchestration", () => {
   it("when receives the same env vars as shell", async () => {
     const cwd = setupConfig("e2e-ae-when-env", {
       "expensive-check": {
+        description: "d",
         hook: "agent_end",
         when: '[ "$PI_EVENT" = agent_end ]',
         shell: "false",
@@ -791,6 +822,7 @@ describe("e2e: agent_end orchestration", () => {
   it("assert with filter and when → both must match before shell runs", async () => {
     const cwd = setupConfig("e2e-ae-filter-and-when", {
       "guard-git-clean": {
+        description: "d",
         hook: "agent_end",
         filter: { event: "agent_end" },
         when: "true",
@@ -809,6 +841,7 @@ describe("e2e: agent_end orchestration", () => {
   it("filter mismatch → assert skipped (never reaches when)", async () => {
     const cwd = setupConfig("e2e-ae-filter-mismatch", {
       "wrong-event": {
+        description: "d",
         hook: "agent_end",
         filter: { event: "tool_call" },
         when: "true",
@@ -827,6 +860,7 @@ describe("e2e: agent_end orchestration", () => {
   it("ctx.signal aborts shell → recorded as failure", async () => {
     const cwd = setupConfig("e2e-ae-signal", {
       "slow-check": {
+        description: "d",
         hook: "agent_end",
         shell: "sleep 10",
       },
@@ -848,6 +882,7 @@ describe("e2e: agent_end orchestration", () => {
   it("failure message formatting matches index.ts", async () => {
     const cwd = setupConfig("e2e-ae-formatting", {
       "check-1": {
+        description: "d",
         hook: "agent_end",
         shell: "exit 42",
       },
@@ -864,11 +899,13 @@ describe("e2e: agent_end orchestration", () => {
   it("mixed hooks: only agent_end asserts produce failures", async () => {
     const cwd = setupConfig("e2e-ae-mixed", {
       "tool-guard": {
+        description: "d",
         hook: "tool_call",
         filter: { toolName: "write" },
         shell: "false",
       },
       "end-guard": {
+        description: "d",
         hook: "agent_end",
         shell: "false",
       },
@@ -895,10 +932,12 @@ describe("e2e: agent_end orchestration", () => {
   it("already-aborted signal → no spurious failures", async () => {
     const cwd = setupConfig("e2e-ae-aborted", {
       "dummy-agent-end": {
+        description: "d",
         hook: "agent_end",
         shell: "true",
       },
       "fail-check": {
+        description: "d",
         hook: "agent_end",
         shell: "false",
       },
