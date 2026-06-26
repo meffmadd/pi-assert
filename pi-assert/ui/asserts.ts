@@ -456,6 +456,7 @@ export class AssertsPanel {
           this.state.enable(selected.name);
         }
         this.state.persist();
+        this.state.updateStatus(ctx);
       }
       return undefined;
     }
