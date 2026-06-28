@@ -1,6 +1,7 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import {
+  Box,
   Component,
   Container,
   matchesKey,
@@ -10,6 +11,7 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
   type SelectItem,
+  type SizeValue,
 } from "@earendil-works/pi-tui";
 
 // ---------------------------------------------------------------------------
@@ -161,16 +163,38 @@ export const DIALOG_WIDTH = 80;
 export const DIALOG_MIN_WIDTH = 80;
 
 // ---------------------------------------------------------------------------
-// borderBox — wrap arbitrary content in DynamicBorder / Text / Container
-// pieces.  The build functions return Container ready to be returned from
+// OverlayBox — the single owner of the pi-assert overlay background.
+//
+// `customMessageBg` is the theme's designated distinct message/overlay
+// background slot (the same one pi uses for custom / compaction / branch /
+// skill message boxes), not the terminal session background, so every
+// pi-assert overlay reads as a consistent surface regardless of theme.
+//
+// Every overlay (the /asserts panel and every install-flow dialog) goes
+// through here so the background choice lives in one place.  Padding
+// defaults to 0 so wrapping existing content doesn't reshape it; the
+// /asserts panel passes (2, 1) to keep its inset.
+// ---------------------------------------------------------------------------
+export class OverlayBox extends Box {
+  constructor(theme: Theme, paddingX = 0, paddingY = 0) {
+    super(paddingX, paddingY, (s: string) => theme.bg("customMessageBg", s));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// titledBox — wrap arbitrary content in DynamicBorder / Text pieces inside
+// an OverlayBox so the titled border, title, body, and hint all share the
+// overlay background.  Returns a Container ready to be returned from
 // ctx.ui.custom's render.
 // ---------------------------------------------------------------------------
 function titledBox(theme: Theme, title: string, children: Component[]): Container {
+  const box = new OverlayBox(theme);
+  box.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+  box.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
+  for (const c of children) box.addChild(c);
+  box.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
   const container = new Container();
-  container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-  container.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
-  for (const c of children) container.addChild(c);
-  container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+  container.addChild(box);
   return container;
 }
 
@@ -217,8 +241,8 @@ function dialogShell(
   };
 }
 
-/** Shared overlay options for every install-flow dialog. */
-function dialogOverlay(maxHeight: number) {
+/** Shared overlay options for every pi-assert overlay (dialogs and the /asserts panel). */
+export function dialogOverlay(maxHeight: SizeValue) {
   return {
     overlay: true as const,
     overlayOptions: {

@@ -1,22 +1,20 @@
 import { type ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
-  Box,
   Container,
   matchesKey,
   Key,
-  visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { Assert } from "../engine.js";
 import { removeRule, setAssertDefault } from "../installer.js";
 import {
-  DIALOG_MIN_WIDTH,
-  DIALOG_WIDTH,
   HINT_D_REMOVE,
   HINT_ENTER_SPACE_ENABLE,
   HINT_ESC_CANCEL,
   HINT_I_INSTALL_ASSERTS,
   HINT_T_TOGGLE_DEFAULT,
+  OverlayBox,
   SectionNavigator,
+  dialogOverlay,
   renderAssertDetail,
   renderDetailList,
   renderHintLine,
@@ -516,11 +514,7 @@ export function registerAssertsCommand(
               handleInput: () => {},
             };
 
-            const box = new Box(
-              2,
-              1,
-              (s: string) => theme.bg("customMessageBg", s),
-            );
+            const box = new OverlayBox(theme, 2, 1);
             box.addChild(panelComponent);
 
             const container = new Container();
@@ -538,16 +532,7 @@ export function registerAssertsCommand(
               },
             };
           },
-          {
-            overlay: true,
-            overlayOptions: {
-              anchor: "center",
-              width: DIALOG_WIDTH,
-              minWidth: DIALOG_MIN_WIDTH,
-              maxHeight: "80%",
-              margin: 4,
-            },
-          },
+          dialogOverlay("80%"),
         );
 
         if (action === "install") {
