@@ -3,7 +3,6 @@ import type { SelectItem } from "@earendil-works/pi-tui";
 import {
   addRepo,
   buildRepoPickerItems,
-  DEFAULT_REPO,
   fetchRuleFile,
   fetchRuleFiles,
   getInstalledRepos,
@@ -44,13 +43,11 @@ async function promptRepoChoice(
 /** Prompt for a new repo name. Returns the trimmed input or null. */
 async function promptNewRepo(
   ctx: ExtensionContext,
-  initial: string | undefined,
 ): Promise<string | null> {
   return textInputDialog(ctx, {
     title: "Add repo",
     label: "Enter owner/repo:",
     hint: [HINT_ENTER_CONFIRM, HINT_ESC_BACK],
-    initial,
   });
 }
 
@@ -61,11 +58,10 @@ async function promptNewRepo(
 async function resolveRepo(
   ctx: ExtensionContext,
   choice: string,
-  isFirstRepo: boolean,
 ): Promise<string | null> {
   if (choice !== REPO_ADD_ACTION) return choice;
 
-  const newRepo = await promptNewRepo(ctx, isFirstRepo ? DEFAULT_REPO : undefined);
+  const newRepo = await promptNewRepo(ctx);
   if (!newRepo) return null;
 
   try {
@@ -229,7 +225,7 @@ export async function runInstallWizard(
   const choice = await promptRepoChoice(ctx, repos);
   if (choice === null) return;
 
-  const repo = await resolveRepo(ctx, choice, repos.length === 0);
+  const repo = await resolveRepo(ctx, choice);
   if (!repo) return;
 
   // Steps 2–5: loop over rule files until the user escapes

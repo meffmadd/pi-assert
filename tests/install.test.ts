@@ -893,33 +893,52 @@ describe("REPO_ADD_ACTION", () => {
 });
 
 describe("buildRepoPickerItems", () => {
-  it("returns only the Add repo item when no repos are configured", () => {
+  const defaultItem = {
+    value: DEFAULT_REPO,
+    label: `${DEFAULT_REPO} (default)`,
+  };
+
+  it("always shows the default repo first, even with no repos configured", () => {
     assert.deepEqual(buildRepoPickerItems([]), [
+      defaultItem,
       { value: REPO_ADD_ACTION, label: "Add repo…" },
     ]);
   });
 
-  it("lists existing repos first, then the Add repo item", () => {
+  it("shows the default repo first, then configured repos, then Add repo", () => {
     assert.deepEqual(buildRepoPickerItems(["a/b", "c/d"]), [
+      defaultItem,
       { value: "a/b", label: "a/b" },
       { value: "c/d", label: "c/d" },
       { value: REPO_ADD_ACTION, label: "Add repo…" },
     ]);
   });
 
-  it("preserves the order of input repos", () => {
+  it("marks the default repo with (default) and does not duplicate it", () => {
+    const result = buildRepoPickerItems([DEFAULT_REPO, "a/b"]);
+    assert.deepEqual(result, [
+      defaultItem,
+      { value: "a/b", label: "a/b" },
+      { value: REPO_ADD_ACTION, label: "Add repo…" },
+    ]);
+  });
+
+  it("preserves the order of non-default input repos", () => {
     const repos = ["z/y", "a/b", "m/n"];
     const result = buildRepoPickerItems(repos);
+    // Strip the leading default item and trailing Add repo item.
     assert.deepEqual(
-      result.slice(0, repos.length).map((r) => r.value),
+      result.slice(1, result.length - 1).map((r) => r.value),
       repos,
     );
   });
 
-  it("appends exactly one Add repo item regardless of input size", () => {
-    assert.equal(buildRepoPickerItems([]).length, 1);
-    assert.equal(buildRepoPickerItems(["a/b"]).length, 2);
-    assert.equal(buildRepoPickerItems(["a/b", "c/d", "e/f"]).length, 4);
+  it("always has exactly one default item and one Add repo item", () => {
+    assert.equal(buildRepoPickerItems([]).length, 2);
+    assert.equal(buildRepoPickerItems(["a/b"]).length, 3);
+    assert.equal(buildRepoPickerItems(["a/b", "c/d", "e/f"]).length, 5);
+    // Default repo is not duplicated when also configured.
+    assert.equal(buildRepoPickerItems([DEFAULT_REPO, "a/b"]).length, 3);
   });
 
   it("places the Add repo item last in the list", () => {

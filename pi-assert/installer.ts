@@ -355,17 +355,32 @@ export function addRepo(cwd: string, repo: string): void {
 /** Sentinel value for the "Add repo…" action item in the repo picker. */
 export const REPO_ADD_ACTION = "__add__";
 
-/** Default repo suggested when adding a repo with none configured. */
+/**
+ * Default repo always shown first in the repo picker (marked "(default)")
+ * so it's a one-key pick and the initial selection. Overridable via the
+ * `PI_ASSERT_DEFAULT_REPO` env var.
+ */
 export const DEFAULT_REPO =
   process.env.PI_ASSERT_DEFAULT_REPO ?? "meffmadd/pi-assert-rules";
 
 /**
  * Build the items list for the repo picker.
- * Lists existing repos first, then a trailing "Add repo…" action item.
+ *
+ * The default repo is always shown first (marked "(default)"), so it's the
+ * initial selection and a one-key pick; other configured repos follow in
+ * their declared order, then a trailing "Add repo…" action item. If the
+ * default repo is also in `repos`, it appears once (at the top).
  */
 export function buildRepoPickerItems(repos: string[]): SelectItem[] {
-  return [
-    ...repos.map((r) => ({ value: r, label: r })),
-    { value: REPO_ADD_ACTION, label: "Add repo…" },
+  const items: SelectItem[] = [
+    { value: DEFAULT_REPO, label: `${DEFAULT_REPO} (default)` },
   ];
+  const seen = new Set([DEFAULT_REPO]);
+  for (const r of repos) {
+    if (seen.has(r)) continue;
+    items.push({ value: r, label: r });
+    seen.add(r);
+  }
+  items.push({ value: REPO_ADD_ACTION, label: "Add repo…" });
+  return items;
 }
