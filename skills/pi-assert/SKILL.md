@@ -309,3 +309,11 @@ whichever owns the entry). Defaults-marked asserts are tagged with
 **future** sessions with no saved session config; the current
 session's active set is unchanged — press `Enter`/`Space` to
 enable/disable the assert right now.
+
+## Disabling all / removing asserts
+
+In the `/asserts` panel, press `d` to disable every active assert at once
+(the selection persists across sessions), or `r` on the focused assert to
+remove it from its `asserts.json` (non-local sources only; prompts for
+confirmation). The `d Disable all` hint only appears when at least one
+assert is active.

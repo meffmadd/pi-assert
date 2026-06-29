@@ -7,10 +7,11 @@ import {
 import type { Assert } from "../engine.js";
 import { removeRule, setAssertDefault } from "../installer.js";
 import {
-  HINT_D_REMOVE,
+  HINT_D_DISABLE_ALL,
   HINT_ENTER_SPACE_ENABLE,
   HINT_ESC_CANCEL,
   HINT_I_INSTALL_ASSERTS,
+  HINT_R_REMOVE,
   HINT_T_TOGGLE_DEFAULT,
   OverlayBox,
   SectionNavigator,
@@ -339,8 +340,11 @@ export class AssertsPanel {
       HINT_T_TOGGLE_DEFAULT,
     ];
 
+    if (this.state.active.size > 0) {
+      items.push(HINT_D_DISABLE_ALL);
+    }
     if (hasRemove) {
-      items.push(HINT_D_REMOVE);
+      items.push(HINT_R_REMOVE);
     }
 
     items.push(HINT_I_INSTALL_ASSERTS);
@@ -395,8 +399,17 @@ export class AssertsPanel {
     const focused = this.groups[this.nav.focusedSection];
     if (!focused) return undefined;
 
-    // ── d: remove selected assert (non-local only) ──
+    // ── d: disable all active asserts (no-op when none active) ──
     if (matchesKey(data, "d")) {
+      if (this.state.active.size === 0) return undefined;
+      this.state.disableAll();
+      this.state.persist();
+      this.state.updateStatus(ctx);
+      return undefined;
+    }
+
+    // ── r: remove selected assert (non-local only) ──
+    if (matchesKey(data, "r")) {
       if (focused.source === "local") {
         ctx.ui.notify("Local asserts cannot be removed from the UI", "info");
         return undefined;

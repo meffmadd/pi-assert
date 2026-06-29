@@ -87,7 +87,8 @@ export const HINT_ENTER_SPACE_ENABLE: [string, string] = ["Enter/Space", "enable
 export const HINT_ESC_CANCEL: [string, string] = ["Esc", "to cancel"];
 export const HINT_ESC_BACK: [string, string] = ["Esc", "back"];
 export const HINT_T_TOGGLE_DEFAULT: [string, string] = ["t", "Toggle default"];
-export const HINT_D_REMOVE: [string, string] = ["d", "Remove"];
+export const HINT_D_DISABLE_ALL: [string, string] = ["d", "Disable all"];
+export const HINT_R_REMOVE: [string, string] = ["r", "Remove"];
 export const HINT_I_INSTALL_ASSERTS: [string, string] = ["i", "Install asserts"];
 
 /** Format a single `[key, action]` segment (no indent/separator). */

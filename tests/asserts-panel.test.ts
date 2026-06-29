@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { AssertsPanel } from "../pi-assert/ui/asserts.js";
 import type { AssertsState } from "../pi-assert/ui/state.js";
 import type { Assert } from "../pi-assert/engine.js";
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 
 // ── Helpers ───────────────────────────────────────────────────────
 
@@ -38,15 +38,26 @@ function makeAssert(
   };
 }
 
-function makePanel(asserts: Assert[]): AssertsPanel {
+function makePanel(asserts: Assert[], active: Set<string> = new Set()): AssertsPanel {
   const state = {
     asserts,
-    active: new Set<string>(),
+    active,
   } as unknown as AssertsState;
 
   const panel = new AssertsPanel(state);
   panel.setTheme(mockTheme());
   return panel;
+}
+
+/** Minimal ExtensionContext mock for handleInput tests. */
+function makeCtx(): ExtensionContext {
+  return {
+    ui: {
+      notify() {},
+      theme: mockTheme(),
+      setStatus() {},
+    },
+  } as unknown as ExtensionContext;
 }
 
 /** Extract the currently highlighted assert row. */
@@ -349,6 +360,96 @@ describe("AssertsPanel", () => {
     assert.ok(
       lines.some((l) => l.includes("echo beta")),
       "detail updates to beta's shell after moving down",
+    );
+  });
+
+  // ── Hint line ───────────────────────────────────────────────────
+
+  it("shows the d Disable all hint when asserts are active", () => {
+    const panel = makePanel([makeAssert("alpha")], new Set(["alpha"]));
+    const lines = panel.render(80);
+    assert.ok(
+      lines.some((l) => l.includes("Disable all")),
+      "shows Disable all when an assert is active",
+    );
+    assert.ok(
+      lines.some((l) => l.includes("[d]")),
+      "Disable all is bound to the d key",
+    );
+  });
+
+  it("hides the d Disable all hint when nothing is active", () => {
+    const panel = makePanel([makeAssert("alpha")]);
+    const lines = panel.render(80);
+    assert.ok(
+      !lines.some((l) => l.includes("Disable all")),
+      "hides Disable all when nothing is active",
+    );
+  });
+
+  it("binds Remove to r (not d) for non-local asserts", () => {
+    const panel = makePanel([makeAssert("alpha", "repo/owner")]);
+    const lines = panel.render(80);
+    assert.ok(
+      lines.some((l) => l.includes("[r] Remove")),
+      "Remove is bound to r for non-local asserts",
+    );
+    assert.ok(
+      !lines.some((l) => l.includes("[d] Remove")),
+      "Remove is no longer bound to d",
+    );
+  });
+
+  // ── d / r keybindings ───────────────────────────────────────────
+
+  it("d clears the active set and persists", () => {
+    const active = new Set(["alpha", "beta"]);
+    let persisted = false;
+    let statusUpdated = false;
+    const state = {
+      asserts: [makeAssert("alpha"), makeAssert("beta")],
+      active,
+      disableAll() { active.clear(); },
+      persist() { persisted = true; },
+      updateStatus() { statusUpdated = true; },
+    } as unknown as AssertsState;
+
+    const panel = new AssertsPanel(state);
+    panel.setTheme(mockTheme());
+
+    panel.handleInput("d", makeCtx());
+
+    assert.equal(active.size, 0, "active set is cleared");
+    assert.ok(persisted, "persist is called");
+    assert.ok(statusUpdated, "status bar is refreshed");
+  });
+
+  it("d is a no-op when nothing is active (no persist)", () => {
+    let persisted = false;
+    const state = {
+      asserts: [makeAssert("alpha")],
+      active: new Set<string>(),
+      disableAll() { /* should not run */ },
+      persist() { persisted = true; },
+      updateStatus() { },
+    } as unknown as AssertsState;
+
+    const panel = new AssertsPanel(state);
+    panel.setTheme(mockTheme());
+
+    panel.handleInput("d", makeCtx());
+
+    assert.ok(!persisted, "must not persist an empty active set");
+  });
+
+  it("r opens the remove confirm for a non-local assert", () => {
+    const panel = makePanel([makeAssert("alpha", "repo/owner")]);
+    panel.handleInput("r", makeCtx());
+
+    const lines = panel.render(80);
+    assert.ok(
+      lines.some((l) => l.includes(`Remove "alpha"? y/n`)),
+      "r opens the remove confirm dialog",
     );
   });
 });

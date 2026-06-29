@@ -128,6 +128,11 @@ export class AssertsState {
     this.active.delete(name);
   }
 
+  /** Remove every assert from the active set. */
+  disableAll(): void {
+    this.active.clear();
+  }
+
   /** Toggle a named assert's active state. */
   toggle(name: string): void {
     if (this.active.has(name)) this.active.delete(name);
