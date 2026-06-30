@@ -5,8 +5,10 @@ import {
   buildRepoPickerItems,
   fetchRuleFile,
   fetchRuleFiles,
+  getInstalledAssertNames,
   getInstalledRepos,
   installRule,
+  removeRule,
   REPO_ADD_ACTION,
   type RuleEntries,
   type RuleEntry,
@@ -19,8 +21,10 @@ import {
   HINT_ENTER_SELECT,
   HINT_ESC_BACK,
   HINT_ESC_CANCEL,
+  HINT_R_REMOVE,
   selectDialog,
   textInputDialog,
+  type SelectDialogResult,
 } from "./components.js";
 import type { AssertsState } from "./state.js";
 
@@ -32,7 +36,7 @@ import type { AssertsState } from "./state.js";
 async function promptRepoChoice(
   ctx: ExtensionContext,
   repos: string[],
-): Promise<string | null> {
+): Promise<SelectDialogResult<string>> {
   return selectDialog<string>(ctx, {
     title: "Repos",
     items: buildRepoPickerItems(repos),
@@ -87,13 +91,13 @@ async function promptRuleFile(
     value: f.path,
     label: f.name,
   }));
-  const chosen = await selectDialog<string>(ctx, {
+  const result = await selectDialog<string>(ctx, {
     title: `Rule Files (${repo})`,
     items,
     hint: [HINT_ENTER_OPEN, HINT_ESC_CANCEL],
   });
-  if (!chosen) return null;
-  return files.find((f) => f.path === chosen) ?? null;
+  if (result.value === null) return null;
+  return files.find((f) => f.path === result.value) ?? null;
 }
 
 /** Fetch the repo's rule files and prompt the user to pick one. */
@@ -124,13 +128,17 @@ async function fetchAndPromptFile(
 // Step 3: pick an assert entry from a rule file
 // ---------------------------------------------------------------------------
 
-/** Show a picker over the parsed assert entries. Returns the chosen name or null. */
+/** Entry picker marking installed entries with `✓`; `r` on an installed entry returns `{ removed: true }`. `installed` and `initialIndex` are caller-supplied so marks/highlight refresh without a reload. */
 async function promptAssertEntry(
   ctx: ExtensionContext,
   file: RuleFile,
   entries: RuleEntries,
-): Promise<string | null> {
+  repo: string,
+  installed: Set<string>,
+  initialIndex?: number,
+): Promise<SelectDialogResult<string>> {
   const fileName = file.path.replace(/^rules\//, "").replace(/\.json$/, "");
+  const theme = ctx.ui.theme;
   const names = Object.keys(entries);
   const items: SelectItem[] = names.map((name) => {
     const e = entries[name]!;
@@ -139,7 +147,10 @@ async function promptAssertEntry(
   return selectDialog<string>(ctx, {
     title: fileName,
     items,
-    hint: [HINT_ENTER_INSTALL, HINT_ESC_CANCEL],
+    hint: [HINT_ENTER_INSTALL, HINT_R_REMOVE, HINT_ESC_CANCEL],
+    initialIndex,
+    mark: (item) => (installed.has(item.value) ? theme.fg("success", "✓ ") : ""),
+    remove: { canRemove: (item) => installed.has(item.value) },
     detailFor: (value) => {
       const e = entries[value];
       if (!e) return undefined;
@@ -148,12 +159,12 @@ async function promptAssertEntry(
   });
 }
 
-/** Fetch a rule file and prompt the user to pick an assert. */
-async function fetchAndPromptEntry(
+/** Fetch a rule file's entries (null on error/empty). Split out so the wizard re-fetches only when the file changes. */
+async function fetchEntries(
   ctx: ExtensionContext,
   repo: string,
   file: RuleFile,
-): Promise<{ name: string; entry: RuleEntry } | null> {
+): Promise<RuleEntries | null> {
   let entries: RuleEntries;
   try {
     entries = await fetchRuleFile(repo, file.path);
@@ -170,14 +181,19 @@ async function fetchAndPromptEntry(
     return null;
   }
 
-  const name = await promptAssertEntry(ctx, file, entries);
-  if (!name) return null;
-  return { name, entry: entries[name]! };
+  return entries;
 }
 
 // ---------------------------------------------------------------------------
 // Install + state reload
 // ---------------------------------------------------------------------------
+
+/** Shared install/remove reload tail. */
+function reload(ctx: ExtensionContext, state: AssertsState): void {
+  state.load(ctx.cwd);
+  state.restore(ctx);
+  state.updateStatus(ctx);
+}
 
 function installAndReload(
   ctx: ExtensionContext,
@@ -196,10 +212,7 @@ function installAndReload(
     );
     return;
   }
-
-  state.load(ctx.cwd);
-  state.restore(ctx);
-  state.updateStatus(ctx);
+  reload(ctx, state);
   ctx.ui.notify(
     `pi-assert: installed "${name}". Use /asserts to enable it.`,
     "info",
@@ -212,9 +225,36 @@ function installAndReload(
   }
 }
 
+function removeAndReload(
+  ctx: ExtensionContext,
+  state: AssertsState,
+  repo: string,
+  name: string,
+): void {
+  let removed: boolean;
+  try {
+    removed = removeRule(ctx.cwd, repo, name);
+  } catch (err) {
+    ctx.ui.notify(
+      `pi-assert: failed to remove "${name}" — ${String(err)}`,
+      "error",
+    );
+    return;
+  }
+  reload(ctx, state);
+  ctx.ui.notify(
+    removed
+      ? `pi-assert: removed "${name}".`
+      : `pi-assert: "${name}" was not installed.`,
+    "info",
+  );
+}
+
 // ---------------------------------------------------------------------------
-// runInstallWizard — linear state machine: pick repo → pick file → pick entry
-// → install → loop back to pick another file from the same repo.
+// runInstallWizard — pick repo → pick file → loop the entry picker for that
+// file (install/remove stay in the same file; Esc → file picker; Esc → exit).
+// Entries are fetched once per file; the installed set is re-read each prompt
+// so `✓` marks refresh immediately.
 // ---------------------------------------------------------------------------
 export async function runInstallWizard(
   ctx: ExtensionContext,
@@ -223,25 +263,39 @@ export async function runInstallWizard(
   // Step 1: pick (or add) a repo
   const repos = getInstalledRepos(ctx.cwd);
   const choice = await promptRepoChoice(ctx, repos);
-  if (choice === null) return;
+  if (choice.value === null) return;
 
-  const repo = await resolveRepo(ctx, choice);
+  const repo = await resolveRepo(ctx, choice.value);
   if (!repo) return;
 
-  // Steps 2–5: loop over rule files until the user escapes
+  // Step 2: pick a rule file.  Loop over files until the user escapes.
   let file: RuleFile | null = await fetchAndPromptFile(ctx, repo);
 
   while (file) {
-    const picked = await fetchAndPromptEntry(ctx, repo, file);
-    if (!picked) {
-      // Esc → back to file picker
+    const entries = await fetchEntries(ctx, repo, file);
+    if (!entries) {
+      // Fetch failed / empty — back to the file picker.
       file = await fetchAndPromptFile(ctx, repo);
       continue;
     }
 
-    installAndReload(ctx, state, repo, picked.name, picked.entry);
+    // Loop the entry picker for this file; Esc drops back to the file picker.
+    let index: number | undefined;
+    for (;;) {
+      const result = await promptAssertEntry(
+        ctx,
+        file,
+        entries,
+        repo,
+        getInstalledAssertNames(ctx.cwd, repo),
+        index,
+      );
+      if (result.value === null) break;
+      if (result.removed) removeAndReload(ctx, state, repo, result.value);
+      else installAndReload(ctx, state, repo, result.value, entries[result.value]!);
+      index = result.index;
+    }
 
-    // Back to file picker to install more
     file = await fetchAndPromptFile(ctx, repo);
   }
 }

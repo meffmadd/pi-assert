@@ -85,8 +85,12 @@ export class AssertsPanel {
       return [
         ...this.renderHeaderLines(),
         "",
-        `  Remove "${this.confirm.name}"? y/n`,
+        `  Remove "${this.confirm.name}"?`,
         "",
+        ...renderHintLine(this.theme, width, [
+          ["y", "confirm"],
+          ["n", "cancel"],
+        ]),
       ];
     }
 

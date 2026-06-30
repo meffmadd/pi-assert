@@ -15,6 +15,7 @@ import {
   removeRule,
   addRepo,
   getInstalledRepos,
+  getInstalledAssertNames,
   setAssertDefault,
   buildRepoPickerItems,
   REPO_ADD_ACTION,
@@ -796,6 +797,108 @@ describe("getInstalledRepos", () => {
       assert.deepStrictEqual(result, expected);
     });
   }
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// getInstalledAssertNames
+// ═══════════════════════════════════════════════════════════════════
+
+describe("getInstalledAssertNames", () => {
+  type Case = {
+    label: string;
+    initialJson: object | undefined;
+    repo: string;
+    expected: string[];
+  };
+
+  const cases: Case[] = [
+    {
+      label: "returns the assert names under the requested repo section",
+      initialJson: {
+        repos: ["some/repo"],
+        local: { "local-rule": { hook: "tool_call", shell: "true" } },
+        "some/repo": {
+          "rule-a": { hook: "tool_call", shell: "false" },
+          "rule-b": { hook: "tool_call", shell: "true" },
+        },
+      },
+      repo: "some/repo",
+      expected: ["rule-a", "rule-b"],
+    },
+    {
+      label: "excludes names from other repo sections and local",
+      initialJson: {
+        repos: ["some/repo", "other/repo"],
+        local: { "local-rule": { hook: "tool_call", shell: "true" } },
+        "some/repo": { "mine": { hook: "tool_call", shell: "false" } },
+        "other/repo": { "theirs": { hook: "tool_call", shell: "true" } },
+      },
+      repo: "some/repo",
+      expected: ["mine"],
+    },
+    {
+      label: "returns [] when the repo section is missing",
+      initialJson: {
+        local: { "local-rule": { hook: "tool_call", shell: "true" } },
+      },
+      repo: "absent/repo",
+      expected: [],
+    },
+    {
+      label: "returns [] when the file is missing",
+      initialJson: undefined,
+      repo: "any/repo",
+      expected: [],
+    },
+    {
+      label: "returns [] on broken JSON",
+      initialJson: undefined, // handled manually
+      repo: "any/repo",
+      expected: [],
+    },
+  ];
+
+  for (const { label, initialJson, repo, expected } of cases) {
+    it(label, () => {
+      const cwd = join(tmpRoot, `names-${label.replace(/[^a-z0-9-]/gi, "-")}`);
+
+      if (label === "returns [] on broken JSON") {
+        mkdirSync(join(cwd, ".pi"), { recursive: true });
+        writeFileSync(join(cwd, ".pi", "asserts.json"), "not json!!!");
+      } else if (label === "returns [] when the file is missing") {
+        // don't create anything
+      } else if (initialJson !== undefined) {
+        mkdirSync(join(cwd, ".pi"), { recursive: true });
+        writeFileSync(join(cwd, ".pi", "asserts.json"), JSON.stringify(initialJson));
+      }
+
+      const result = Array.from(getInstalledAssertNames(cwd, repo)).sort();
+      assert.deepStrictEqual(result, expected);
+    });
+  }
+
+  // ── Reflects installs immediately (no caching) ────────────────
+
+  it("reflects a fresh install without re-reading a cached value", () => {
+    const cwd = join(tmpRoot, "names-reflects-install");
+    mkdirSync(cwd, { recursive: true });
+
+    assert.deepStrictEqual(
+      Array.from(getInstalledAssertNames(cwd, "some/repo")),
+      [],
+    );
+
+    installRule(cwd, "some/repo", "fresh-rule", {
+      description: "Fresh.",
+      hook: "tool_call",
+      shell: "false",
+    });
+
+    assert.deepStrictEqual(
+      Array.from(getInstalledAssertNames(cwd, "some/repo")),
+      ["fresh-rule"],
+    );
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════

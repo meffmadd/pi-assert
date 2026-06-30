@@ -266,7 +266,23 @@ export function dialogOverlay(maxHeight: SizeValue) {
 // under the highlighted row (the assert-entry picker does this).  Omit it
 // for plain pickers (repo / rule-file) which just get the shared list look
 // with no detail block.
+//
+// `initialIndex`/`mark`/`remove` tailor the entry picker: `initialIndex`
+// reopens on the same row after a reload; `mark` renders a leading badge
+// *outside* the accent wrap (so a coloured mark keeps its colour on the
+// selected row); `remove` enables `r` → inline `y/n` confirm, mirroring the
+// /asserts panel.
 // ---------------------------------------------------------------------------
+
+/** {@link selectDialog} outcome: chosen value (or null), last highlighted index, and whether the user confirmed a removal. */
+export interface SelectDialogResult<T> {
+  value: T | null;
+  /** Last highlighted row — pass back as `initialIndex` to remember position across reloads. */
+  index: number;
+  /** `true` when the user pressed `r` then `y` on a removable item. */
+  removed: boolean;
+}
+
 export async function selectDialog<T>(
   ctx: ExtensionContext,
   opts: {
@@ -277,16 +293,32 @@ export async function selectDialog<T>(
     maxVisible?: number;
     /** Resolve the shell/when preview for a given item value. */
     detailFor?: (value: string) => { shell: string; when?: string } | undefined;
+    /** Start the highlight at this index (clamped to the list). */
+    initialIndex?: number;
+    /** Leading per-item badge rendered before the label, outside the accent wrap. Return "" for no mark. */
+    mark?: (item: SelectItem) => string;
+    /** Enable the `r` Remove keybinding; `canRemove` gates which items are removable. */
+    remove?: { canRemove: (item: SelectItem) => boolean };
   },
-): Promise<T | null> {
+): Promise<SelectDialogResult<T>> {
   const hasDetail = !!opts.detailFor;
   const maxHeight = Math.min(
     opts.items.length + (hasDetail ? 12 : 4),
     hasDetail ? 24 : 16,
   );
 
-  return ctx.ui.custom<T | null>((tui, theme, _kb, done) => {
+  return ctx.ui.custom<SelectDialogResult<T>>((tui, theme, _kb, done) => {
     const max = opts.maxVisible ?? Math.min(opts.items.length, hasDetail ? 10 : 12);
+
+    // Widest mark reserves a badge column; marks render outside the accent
+    // wrap so a coloured mark keeps its colour on the selected row.
+    const markFn = opts.mark;
+    const badgeW = markFn
+      ? opts.items.reduce(
+          (w, it) => Math.max(w, visibleWidth(markFn(it) ?? "")),
+          0,
+        )
+      : 0;
 
     // Label column: widest label + 2-char gap, clamped to a sane range.
     const primary = Math.min(
@@ -298,18 +330,23 @@ export async function selectDialog<T>(
     );
 
     const renderRow = (item: SelectItem, selected: boolean, w: number): string => {
+      const rawBadge = markFn?.(item) ?? "";
+      const badge =
+        badgeW > 0 ? rawBadge + " ".repeat(badgeW - visibleWidth(rawBadge)) : "";
       const label = truncateToWidth(item.label, primary - 2, "");
       const labelPad = " ".repeat(Math.max(1, primary - visibleWidth(label)));
-      const descStart = 2 + primary; // prefix(2) + primary column
+      const descStart = 2 + badgeW + primary; // prefix(2) + badge + primary column
       const descRemaining = Math.max(0, w - descStart - 2);
       if (item.description && descRemaining > 10) {
         const desc = truncateToWidth(item.description, descRemaining, "");
         const body = `${label}${labelPad}${desc}`;
         return selected
-          ? theme.fg("accent", body)
-          : `${label}${theme.fg("muted", labelPad + desc)}`;
+          ? `${badge}${theme.fg("accent", body)}`
+          : `${badge}${label}${theme.fg("muted", labelPad + desc)}`;
       }
-      return selected ? theme.fg("accent", label) : label;
+      return selected
+        ? `${badge}${theme.fg("accent", label)}`
+        : `${badge}${label}`;
     };
 
     const list = new DetailList<SelectItem>(
@@ -319,8 +356,16 @@ export async function selectDialog<T>(
       renderRow,
       (item) => opts.detailFor?.(item.value),
     );
-    list.onSelect = (item) => done(item.value as T);
-    list.onCancel = () => done(null);
+    if (opts.initialIndex !== undefined && opts.items.length > 0) {
+      list.selectedIndex = Math.max(
+        0,
+        Math.min(opts.initialIndex, opts.items.length - 1),
+      );
+    }
+    list.onSelect = (item) =>
+      done({ value: item.value as T, index: list.selectedIndex, removed: false });
+    list.onCancel = () =>
+      done({ value: null, index: list.selectedIndex, removed: false });
 
     const shell = dialogShell(ctx, theme, {
       title: opts.title,
@@ -329,10 +374,60 @@ export async function selectDialog<T>(
       maxHeight,
     });
 
+    // `r` on a removable item swaps the body to a `Remove "x"?` confirm;
+    // `y` resolves `removed: true`, `n`/Esc returns to the list.
+    let confirmItem: SelectItem | null = null;
+    const confirmShell = opts.remove
+      ? dialogShell(ctx, theme, {
+          title: "Remove assert",
+          body: {
+            render: () => [`  Remove "${confirmItem?.value ?? ""}"?`],
+            invalidate() {},
+          } as Component,
+          hint: [
+            ["y", "confirm"],
+            ["n", "cancel"],
+          ],
+          maxHeight,
+        })
+      : null;
+
     return {
-      render: shell.render,
-      invalidate: shell.invalidate,
+      render: (w: number) =>
+        confirmItem && confirmShell ? confirmShell.render(w) : shell.render(w),
+      invalidate: () => {
+        shell.invalidate();
+        confirmShell?.invalidate();
+      },
       handleInput: (data: string) => {
+        if (confirmItem) {
+          if (matchesKey(data, "y")) {
+            done({
+              value: confirmItem.value as T,
+              index: list.selectedIndex,
+              removed: true,
+            });
+            return;
+          }
+          if (matchesKey(data, "n") || matchesKey(data, Key.escape)) {
+            confirmItem = null;
+            tui.requestRender();
+            return;
+          }
+          return; // ignore other keys while confirming
+        }
+
+        if (matchesKey(data, "r") && opts.remove) {
+          const item = opts.items[list.selectedIndex];
+          if (item && opts.remove.canRemove(item)) {
+            confirmItem = item;
+          } else {
+            ctx.ui.notify("Only installed asserts can be removed", "info");
+          }
+          tui.requestRender();
+          return;
+        }
+
         list.handleInput(data);
         tui.requestRender();
       },

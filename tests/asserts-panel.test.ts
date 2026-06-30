@@ -448,8 +448,19 @@ describe("AssertsPanel", () => {
 
     const lines = panel.render(80);
     assert.ok(
-      lines.some((l) => l.includes(`Remove "alpha"? y/n`)),
+      lines.some((l) => l.includes(`Remove "alpha"?`)),
       "r opens the remove confirm dialog",
+    );
+  });
+
+  it("remove confirm shows a y/n keybinding hint", () => {
+    const panel = makePanel([makeAssert("alpha", "repo/owner")]);
+    panel.handleInput("r", makeCtx());
+
+    const lines = panel.render(80);
+    assert.ok(
+      lines.some((l) => /y.*confirm/.test(l) && /n.*cancel/.test(l)),
+      "confirm renders the y/n hint (matches the install flow)",
     );
   });
 });

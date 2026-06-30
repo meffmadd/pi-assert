@@ -121,6 +121,18 @@ define an assert with the same `name` will overwrite each other on
 install (last install wins); the installer shows a warning notification
 when an install overwrites an existing assert.
 
+**Install flow.** After installing or removing an assert, the entry
+picker reopens for the *same* file on the last highlighted row so you can
+install or remove several asserts from it in a row; press `Esc` to drop
+back to the file picker, and `Esc` again to exit.  Asserts you've already
+installed under the chosen repo are marked with a leading `✓` in the entry
+picker.
+
+From the entry picker, press `r` on an installed (`✓`) entry to remove it —
+an inline `Remove "name"? y/n` confirm appears; `y` removes it from
+`.pi/asserts.json` and reloads, `n`/`Esc` cancels.  `r` on an entry that
+isn't installed notifies instead (only installed asserts can be removed).
+
 ## Common Patterns
 
 ### Conditional asserts with `when` (skip expensive checks)
