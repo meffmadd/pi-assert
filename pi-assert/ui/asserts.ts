@@ -66,7 +66,26 @@ export class AssertsPanel {
   }
 
   // ── Render ─────────────────────────────────────────────────────────
+  // `render` is the single emission point: it always returns header + body +
+  // a blank separator + a hint line.  The individual branches in `bodyLines`
+  // never append the hint themselves, so no mode (empty / confirm / bounded /
+  // unbounded) can forget it — the bug that prompted this structure.
   render(width: number, terminalHeight?: number): string[] {
+    const hintLines = this.hintLine(width);
+    const body = this.bodyLines(width, terminalHeight, hintLines.length);
+    const rendered = [...body, "", ...hintLines];
+    if (terminalHeight !== undefined && rendered.length > terminalHeight) {
+      return rendered.slice(0, terminalHeight);
+    }
+    return rendered;
+  }
+
+  /** Header + content for the current mode, WITHOUT the trailing hint — that's `render`'s job. */
+  private bodyLines(
+    width: number,
+    terminalHeight: number | undefined,
+    hintLen: number,
+  ): string[] {
     if (this.groups.length === 0) {
       return [
         ...this.renderHeaderLines(),
@@ -76,8 +95,6 @@ export class AssertsPanel {
             this.theme.fg("accent", "i") +
             " to install.",
         ),
-        "",
-        ...this.hintLine(width),
       ];
     }
 
@@ -86,16 +103,11 @@ export class AssertsPanel {
         ...this.renderHeaderLines(),
         "",
         `  Remove "${this.confirm.name}"?`,
-        "",
-        ...renderHintLine(this.theme, width, [
-          ["y", "confirm"],
-          ["n", "cancel"],
-        ]),
       ];
     }
 
     if (terminalHeight === undefined) {
-      return this.renderUnbounded(width);
+      return this.renderUnboundedBody(width);
     }
 
     // Header (3 lines) and footer (1 blank + hint line(s)) are reserved.
@@ -104,7 +116,8 @@ export class AssertsPanel {
     // directly below the highlighted assert row, so the active section's
     // line budget includes both assert rows and the selected row's details.
     const headerLines = this.renderHeaderLines();
-    const hintLines = this.hintLine(width);
+    const available =
+      terminalHeight - headerLines.length - 1 - hintLen;
     const focusedSection = this.nav.focusedSection;
     const activeGroup = this.groups[focusedSection];
     const activeLen = activeGroup.asserts.length;
@@ -112,9 +125,6 @@ export class AssertsPanel {
     const detailBlock = selectedAssert
       ? renderAssertDetail(this.theme, width, selectedAssert)
       : [];
-
-    const available =
-      terminalHeight - headerLines.length - 1 - hintLines.length;
 
     // Always reserve space for the previous/next section headers and the
     // separators between them and the active section.
@@ -208,23 +218,10 @@ export class AssertsPanel {
       }
     }
 
-    const rendered = [
-      ...headerLines,
-      ...lines,
-      "",
-      ...hintLines,
-    ];
-
-    // If the terminal is too small for everything, keep the header by
-    // clipping from the bottom rather than letting the top scroll away.
-    if (terminalHeight !== undefined && rendered.length > terminalHeight) {
-      return rendered.slice(0, terminalHeight);
-    }
-
-    return rendered;
+    return [...headerLines, ...lines];
   }
 
-  private renderUnbounded(width: number): string[] {
+  private renderUnboundedBody(width: number): string[] {
     const lines: string[] = [];
     for (let i = 0; i < this.groups.length; i++) {
       const g = this.groups[i];
@@ -233,7 +230,7 @@ export class AssertsPanel {
       lines.push(...this.renderSection(width, g, isFocused, this.nav.focusedIndex));
       if (i < this.groups.length - 1) lines.push("");
     }
-    return [...this.renderHeaderLines(), ...lines, "", ...this.hintLine(width)];
+    return [...this.renderHeaderLines(), ...lines];
   }
 
   private renderHeaderLines(): string[] {
@@ -335,20 +332,25 @@ export class AssertsPanel {
     return [start, end];
   }
 
+  /** The one hint source — confirm-aware so `render`'s tail always emits the right hint. */
   private hintLine(width?: number): string[] {
+    if (this.confirm) {
+      return renderHintLine(this.theme, width, [
+        ["y", "confirm"],
+        ["n", "cancel"],
+      ]);
+    }
+
     const items: [string, string][] = [
       HINT_ENTER_SPACE_ENABLE,
       HINT_T_TOGGLE_DEFAULT,
     ];
-
     if (this.state.active.size > 0) {
       items.push(HINT_D_DISABLE_ALL);
     }
     items.push(HINT_R_REMOVE);
-
     items.push(HINT_I_INSTALL_ASSERTS);
     items.push(HINT_ESC_CANCEL);
-
     return renderHintLine(this.theme, width, items);
   }
 

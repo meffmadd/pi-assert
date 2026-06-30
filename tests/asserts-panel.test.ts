@@ -483,4 +483,33 @@ describe("AssertsPanel", () => {
       "confirm renders the y/n hint (matches the install flow)",
     );
   });
+
+  // Structural guard: `render` is the single emission point that always tails
+  // the output with a hint line, so no mode (empty / confirm / bounded /
+  // unbounded) can forget the hint — the regression that prompted this.
+  it("every render mode ends with a hint line", () => {
+    const panel = makePanel([
+      makeAssert("alpha", "repo/owner"),
+      makeAssert("beta", "repo/owner"),
+    ]);
+    const isHint = (l: string) =>
+      /Remove|Esc|Install|enable|Toggle|Disable|confirm|cancel/.test(l);
+
+    // Empty panel.
+    assert.ok(
+      isHint([...makePanel([]).render(80, 20)].reverse().find((l) => l.trim())!),
+      "empty panel ends with a hint",
+    );
+    // Bounded + unbounded normal.
+    assert.ok(isHint([...panel.render(80, 20)].reverse().find((l) => l.trim())!),"bounded normal ends with a hint");
+    assert.ok(isHint([...panel.render(80)].reverse().find((l) => l.trim())!),
+      "unbounded normal ends with a hint",
+    );
+    // Confirm.
+    panel.handleInput("r", makeCtx());
+    assert.ok(
+      isHint([...panel.render(80, 20)].reverse().find((l) => l.trim())!),
+      "confirm ends with a hint",
+    );
+  });
 });
