@@ -336,9 +336,6 @@ export class AssertsPanel {
   }
 
   private hintLine(width?: number): string[] {
-    const focused = this.groups[this.nav.focusedSection];
-    const hasRemove = focused && focused.source !== "local";
-
     const items: [string, string][] = [
       HINT_ENTER_SPACE_ENABLE,
       HINT_T_TOGGLE_DEFAULT,
@@ -347,9 +344,7 @@ export class AssertsPanel {
     if (this.state.active.size > 0) {
       items.push(HINT_D_DISABLE_ALL);
     }
-    if (hasRemove) {
-      items.push(HINT_R_REMOVE);
-    }
+    items.push(HINT_R_REMOVE);
 
     items.push(HINT_I_INSTALL_ASSERTS);
     items.push(HINT_ESC_CANCEL);
@@ -412,12 +407,8 @@ export class AssertsPanel {
       return undefined;
     }
 
-    // ── r: remove selected assert (non-local only) ──
+    // ── r: remove selected assert ──
     if (matchesKey(data, "r")) {
-      if (focused.source === "local") {
-        ctx.ui.notify("Local asserts cannot be removed from the UI", "info");
-        return undefined;
-      }
       const selected = focused.asserts[this.nav.focusedIndex];
       if (selected) {
         this.confirm = { name: selected.name, source: focused.source };

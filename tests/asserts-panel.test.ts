@@ -387,12 +387,12 @@ describe("AssertsPanel", () => {
     );
   });
 
-  it("binds Remove to r (not d) for non-local asserts", () => {
+  it("binds Remove to r (not d)", () => {
     const panel = makePanel([makeAssert("alpha", "repo/owner")]);
     const lines = panel.render(80);
     assert.ok(
       lines.some((l) => l.includes("[r] Remove")),
-      "Remove is bound to r for non-local asserts",
+      "Remove is bound to r",
     );
     assert.ok(
       !lines.some((l) => l.includes("[d] Remove")),
@@ -450,6 +450,26 @@ describe("AssertsPanel", () => {
     assert.ok(
       lines.some((l) => l.includes(`Remove "alpha"?`)),
       "r opens the remove confirm dialog",
+    );
+  });
+
+  it("r opens the remove confirm for a local assert too", () => {
+    const panel = makePanel([makeAssert("alpha")]);
+    panel.handleInput("r", makeCtx());
+
+    const lines = panel.render(80);
+    assert.ok(
+      lines.some((l) => l.includes(`Remove "alpha"?`)),
+      "r opens the remove confirm for local asserts (no notify gate)",
+    );
+  });
+
+  it("shows the Remove hint for a local section", () => {
+    const panel = makePanel([makeAssert("alpha")]);
+    const lines = panel.render(80);
+    assert.ok(
+      lines.some((l) => l.includes("[r] Remove")),
+      "the Remove hint appears for local sections too",
     );
   });
 
