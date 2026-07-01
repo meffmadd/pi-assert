@@ -344,6 +344,83 @@ describe("validate", () => {
       },
       expected: true,
     },
+
+    // ── Array filter values (any-of) ─────────────────────────────────
+
+    {
+      label: "accepts array filter value for toolName (any-of)",
+      config: {
+        local: {
+          "block-writes": {
+            description: "d",
+            hook: "tool_call",
+            filter: { toolName: ["write", "edit"] },
+            shell: "false",
+          },
+        },
+      },
+      expected: true,
+    },
+
+    {
+      label: "accepts single-element array filter value",
+      config: {
+        local: {
+          "block-write": {
+            description: "d",
+            hook: "tool_call",
+            filter: { toolName: ["write"] },
+            shell: "false",
+          },
+        },
+      },
+      expected: true,
+    },
+
+    {
+      label: "accepts empty array filter value",
+      config: {
+        local: {
+          "noop": {
+            description: "d",
+            hook: "tool_call",
+            filter: { toolName: [] },
+            shell: "false",
+          },
+        },
+      },
+      expected: true,
+    },
+
+    {
+      label: "accepts array filter on a non-toolName key",
+      config: {
+        local: {
+          "block-commands": {
+            description: "d",
+            hook: "tool_call",
+            filter: { command: ["ls", "pwd"] },
+            shell: "false",
+          },
+        },
+      },
+      expected: true,
+    },
+
+    {
+      label: "rejects object element inside a filter array",
+      config: {
+        local: {
+          "bad": {
+            description: "d",
+            hook: "tool_call",
+            filter: { toolName: [{ write: true }] },
+            shell: "false",
+          },
+        },
+      },
+      expected: false,
+    },
   ];
 
   for (const { label, config, expected } of cases) {

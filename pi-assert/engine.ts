@@ -23,7 +23,14 @@ export interface Assert {
   description: string;
   /** Pi event name to intercept (e.g. "tool_call"). */
   hook: string;
-  /** Optional key-value filter matched against { toolName, ...event.input }. */
+  /**
+   * Optional key-value filter matched against the hook's candidate record
+   * (for tool_call/tool_result: `{ toolName, ...event.input }`; for
+   * agent_end: `{ event: "agent_end" }`).  Each value may be a scalar
+   * (strict `===` match) or an array — an array means "any of" the values
+   * (the candidate value matches if it `===` equals any element).  An empty
+   * array matches nothing.
+   */
   filter?: Record<string, unknown>;
   /** Optional precondition shell command. Only runs the main `shell` if this exits 0. */
   when?: string;
@@ -272,8 +279,19 @@ function readSections(
 
 /**
  * Check whether the optional filter matches a candidate record.
- * Every key in the filter must equal the corresponding value in
- * the candidate.  No filter → always matches.
+ * Every key in the filter must match the corresponding value in the
+ * candidate.  No filter → always matches.
+ *
+ * Matching rule per key:
+ * - If the filter value is an **array**, the candidate value matches when
+ *   it `===` equals any element of the array ("any of").  An empty array
+ *   matches nothing.
+ * - Otherwise (a scalar), the candidate value must `===` equal the filter
+ *   value (the original strict-equality behaviour).
+ *
+ * A key missing from the candidate yields `undefined`, which matches an
+ * array only if `undefined` is an explicit element, and a scalar only if
+ * the scalar itself is `undefined` — matching the pre-array behaviour.
  *
  * For tool_call hooks, the candidate is `{ toolName, ...event.input }`.
  * For tool_result hooks, the candidate is `{ toolName, ...event.input }`.
@@ -286,7 +304,13 @@ export function matchFilter(
   if (!filter) return true;
 
   for (const key of Object.keys(filter)) {
-    if (candidate[key] !== filter[key]) return false;
+    const expected = filter[key];
+    if (Array.isArray(expected)) {
+      // Empty array → matches nothing (an IN () with no members).
+      if (!expected.includes(candidate[key] as never)) return false;
+    } else if (candidate[key] !== expected) {
+      return false;
+    }
   }
 
   return true;

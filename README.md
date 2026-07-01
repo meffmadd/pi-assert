@@ -42,7 +42,7 @@ Start pi — all `write` calls and dangerous `rm -rf` commands are now blocked.
 | Field | Required | Description |
 |-------|----------|-------------|
 | `hook` | yes | Pi event. Currently `"tool_call"`. |
-| `filter` | no | Key-value match against tool call input. |
+| `filter` | no | Key-value match against tool call input. Each value may be a scalar or an array (array = "any of", e.g. `{ "toolName": ["write", "edit"] }`). |
 | `shell` | yes | Shell command. Exit 0 = pass, non-zero = block. |
 
 ## Environment Variables

@@ -45,9 +45,17 @@
         },
         "filter": {
           "type": "object",
-          "description": "Key-value filter matched against { toolName, ...event.input }. If every key matches, the assert fires. Omitted → fires on every tool call.",
+          "description": "Key-value filter matched against { toolName, ...event.input }. If every key matches, the assert fires. Omitted → fires on every tool call. Each value may be a scalar (strict === match) or an array — an array means 'any of' its elements match the candidate value (e.g. { \"toolName\": [\"write\", \"edit\"] } runs on either). An empty array matches nothing.",
           "additionalProperties": {
-            "type": ["string", "number", "boolean", "null"]
+            "anyOf": [
+              { "type": ["string", "number", "boolean", "null"] },
+              {
+                "type": "array",
+                "description": "Array of scalars; candidate value matches if it === any element (any-of).",
+                "items": { "type": ["string", "number", "boolean", "null"] },
+                "uniqueItems": false
+              }
+            ]
           }
         },
         "shell": {

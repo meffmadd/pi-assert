@@ -48,7 +48,7 @@ VS Code and other editors will then provide:
 | Field    | Required | Description |
 |----------|----------|-------------|
 | `hook`   | yes      | Pi event name: `"tool_call"`, `"tool_result"`, or `"agent_end"`. |
-| `filter` | no       | Key-value object matched against the event's candidate record. For `tool_call` and `tool_result`: `{ toolName, ...event.input }`. For `agent_end`: `{ event: "agent_end" }`. Omitted → fires on every matching event. |
+| `filter` | no       | Key-value object matched against the event's candidate record. For `tool_call` and `tool_result`: `{ toolName, ...event.input }`. For `agent_end`: `{ event: "agent_end" }`. Omitted → fires on every matching event. Each value may be a scalar (strict `===` match) or an **array** — an array means "any of": the candidate value matches if it equals any element (e.g. `{ "toolName": ["write", "edit"] }` runs on either). An empty array matches nothing. |
 | `when`   | no       | Optional precondition shell command. The main `shell` only runs when this exits 0. Use to skip expensive asserts when they don't apply (e.g., only check writes to `.env` if the working tree is dirty). |
 | `shell`   | yes      | Shell command string. Pipes, redirects, `&&`, `||` all work — runs through a real shell. Exit 0 → allow; non-zero → block (or warn, for session_shutdown). |
 | `default` | no       | If `true`, this assert is active by default for new sessions. Defaults to `false` (inactive until manually enabled via `/asserts`). |
@@ -154,6 +154,26 @@ state, file existence, environment checks, etc.):
 
 Without `when`, every write would be blocked. With `when`, writes are blocked only
 when the working tree is dirty — a cheap shell check before the assert kicks in.
+
+### Array filters — run on one of several tools
+
+Any filter value can be an array, meaning "any of". The most common use is
+matching several tool names with one assert instead of duplicating it:
+
+```json
+{
+  "block-writes": {
+    "hook": "tool_call",
+    "filter": { "toolName": ["write", "edit"] },
+    "shell": "false"
+  }
+}
+```
+
+This runs on `write` **or** `edit` (and only those). A single-element array is
+equivalent to a scalar, and an empty array matches nothing. The rule applies
+to every filter key, not just `toolName` — e.g. `{ "command": ["ls", "pwd"] }`
+matches a `bash` call whose `command` is either.
 
 ### Block all write tool calls (require edit instead)
 
