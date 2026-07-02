@@ -3,9 +3,10 @@ import {
   Container,
   matchesKey,
   Key,
+  visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { Assert } from "../engine.js";
-import { removeRule, setAssertDefault } from "../installer.js";
+import { fetchRepoEntries, removeRule, setAssertDefault } from "../installer.js";
 import {
   HINT_D_DISABLE_ALL,
   HINT_ENTER_SPACE_ENABLE,
@@ -58,11 +59,73 @@ export class AssertsPanel {
   nav: SectionNavigator<Assert>;
   private confirm: { name: string; source: string } | null = null;
 
+  /**
+   * Composite keys (`${source}\0${name}`) of installed asserts that no longer
+   * exist in their source repo (removed upstream).  Keyed by source+name so a
+   * local assert (or a different repo's assert) sharing a name with an
+   * orphaned repo assert is never mis-badged.  Populated asynchronously by
+   * `startOrphanCheck`; empty until the fetch settles.  Local asserts are
+   * never orphaned.
+   */
+  private orphaned = new Set<string>();
+
+  /** Re-render trigger, set by the caller so async fetch resolution can flip badges in. */
+  private requestRender: () => void = () => {};
+
   constructor(private state: AssertsState) {
     this.groups = groupBySource(state.asserts);
     this.nav = new SectionNavigator<Assert>(
       this.groups.map((g) => ({ items: g.asserts })),
     );
+  }
+
+  /** Wire the TUI re-render trigger (called inside `ctx.ui.custom`). */
+  setRequestRender(fn: () => void): void {
+    this.requestRender = fn;
+  }
+
+  /**
+   * Kick off async repo fetches to detect orphaned asserts — installed names
+   * missing from their source repo.  When all fetches settle, populates
+   * `orphaned` and triggers a re-render so `⚠` badges appear.
+   *
+   * Skipped entirely when the config is broken (hard-fail posture) or when
+   * there are no repo-sourced asserts.  Network failures degrade silently:
+   * a repo that can't be fetched contributes no orphaned entries (no `⚠`),
+   * and the session cache means the next open retries.
+   */
+  startOrphanCheck(): void {
+    if (this.state.broken) return;
+
+    const repos = new Set<string>();
+    for (const a of this.state.asserts) {
+      if (a.source !== "local") repos.add(a.source);
+    }
+    if (repos.size === 0) return;
+
+    // Fetch each repo's entries (session-cached per repo@ref).
+    const fetches = [...repos].map(async (repo) => {
+      try {
+        return [repo, await fetchRepoEntries(repo)] as const;
+      } catch {
+        return null; // network failure → no orphaned detection for this repo
+      }
+    });
+
+    Promise.all(fetches).then((results) => {
+      const orphaned = new Set<string>();
+      for (const result of results) {
+        if (!result) continue;
+        const [repo, entries] = result;
+        for (const a of this.state.asserts) {
+          if (a.source === repo && !entries.has(a.name)) {
+            orphaned.add(`${a.source}\0${a.name}`);
+          }
+        }
+      }
+      this.orphaned = orphaned;
+      this.requestRender();
+    });
   }
 
   // ── Render ─────────────────────────────────────────────────────────
@@ -123,7 +186,10 @@ export class AssertsPanel {
     const activeLen = activeGroup.asserts.length;
     const selectedAssert = activeGroup.asserts[this.nav.focusedIndex];
     const detailBlock = selectedAssert
-      ? renderAssertDetail(this.theme, width, selectedAssert)
+      ? [
+          ...this.orphanedDetailLines(selectedAssert),
+          ...renderAssertDetail(this.theme, width, selectedAssert),
+        ]
       : [];
 
     // Always reserve space for the previous/next section headers and the
@@ -260,14 +326,32 @@ export class AssertsPanel {
     end = group.asserts.length,
   ): string[] {
     if (!focused) {
-      // Dimmed static listing
+      // Dimmed static listing.
+      const orphaned = this.orphaned;
+      const orphanW = visibleWidth(this.theme.fg("warning", "⚠ "));
+      const isOrphaned = (a: Assert) =>
+        orphaned.has(`${a.source}\0${a.name}`);
+      const maxLabelWidth = Math.max(
+        ...group.asserts.map(
+          (a) =>
+            (a.default ? `${a.name} (default)` : a.name).length +
+            (isOrphaned(a) ? orphanW : 0),
+        ),
+      );
       const lines: string[] = [];
       for (const a of group.asserts) {
+        const badge = isOrphaned(a)
+          ? this.theme.fg("warning", "⚠ ")
+          : "";
+        const label = a.default ? `${a.name} (default)` : a.name;
+        const labelW = label.length + (isOrphaned(a) ? orphanW : 0);
+        const padding = " ".repeat(Math.max(0, maxLabelWidth - labelW));
         const status = this.state.active.has(a.name)
           ? this.theme.fg("muted", "enabled")
           : this.theme.fg("dim", "disabled");
-        const tag = a.default ? this.theme.fg("dim", " (default)") : "";
-        lines.push(`   ${this.theme.fg("muted", a.name)}${tag}  ${status}`);
+        lines.push(
+          `   ${badge}${this.theme.fg("muted", label + padding)}  ${status}`,
+        );
       }
       return lines;
     }
@@ -277,13 +361,25 @@ export class AssertsPanel {
     // identical to the install wizard's assert-entry picker.  We pass our
     // own [start, end) window (the panel manages per-section scrolling and
     // renders its own scroll indicator outside the section).
-    const maxLabelWidth = Math.max(
-      ...group.asserts.map((a) =>
-        (a.default ? `${a.name} (default)` : a.name).length
-      ),
-    );
+    //
+    // Orphaned asserts (removed upstream) get a `⚠` badge rendered OUTSIDE
+    // the accent wrap so it keeps its warning colour on the selected row;
+    // the badge width is reserved in `maxLabelWidth` so the status column
+    // stays aligned across marked and unmarked rows.
     const theme = this.theme;
     const active = this.state.active;
+    const orphaned = this.orphaned;
+    const isOrphaned = (a: Assert) => orphaned.has(`${a.source}\0${a.name}`);
+    const orphanBadge = (a: Assert) =>
+      isOrphaned(a) ? theme.fg("warning", "⚠ ") : "";
+    const orphanW = visibleWidth(theme.fg("warning", "⚠ "));
+    const maxLabelWidth = Math.max(
+      ...group.asserts.map(
+        (a) =>
+          (a.default ? `${a.name} (default)` : a.name).length +
+          (isOrphaned(a) ? orphanW : 0),
+      ),
+    );
 
     return renderDetailList(theme, width, {
       items: group.asserts,
@@ -291,19 +387,38 @@ export class AssertsPanel {
       window: [start, end],
       showScrollIndicator: false,
       renderRow: (a, selected) => {
+        const badge = orphanBadge(a);
         const label = a.default ? `${a.name} (default)` : a.name;
         const status = active.has(a.name) ? "enabled" : "disabled";
-        const padding = " ".repeat(Math.max(0, maxLabelWidth - label.length));
+        const labelW =
+          label.length + (isOrphaned(a) ? orphanW : 0);
+        const padding = " ".repeat(Math.max(0, maxLabelWidth - labelW));
         const labelText = selected
           ? theme.fg("accent", label + padding)
           : label + padding;
         const valueText = selected
           ? theme.fg("accent", status)
           : theme.fg("dim", status);
-        return `${labelText}  ${valueText}`;
+        return `${badge}${labelText}  ${valueText}`;
       },
       detailFor: (a) => ({ shell: a.shell, when: a.when }),
+      detailPrefix: (a) => this.orphanedDetailLines(a),
     });
+  }
+
+  /**
+   * Contextual warning line shown in the detail block under a focused
+   * orphaned assert — explains what the `⚠` badge means and how to act on
+   * it.  Returns `[]` for non-orphaned asserts so the detail block is
+   * unchanged.
+   */
+  private orphanedDetailLines(a: Assert): string[] {
+    if (!this.orphaned.has(`${a.source}\0${a.name}`)) return [];
+    return [
+      "    " +
+        this.theme.fg("warning", "⚠ ") +
+        this.theme.fg("dim", "removed from source repo — press r to uninstall"),
+    ];
   }
 
   private renderInactiveSectionHeader(group: Group): string[] {
@@ -512,6 +627,10 @@ export function registerAssertsCommand(
           (tui, theme, _kb, done) => {
             const panel = new AssertsPanel(state);
             panel.setTheme(theme);
+            // Wire the re-render trigger so the async orphaned-check can
+            // flip `⚠` badges in when `fetchRepoEntries` settles.
+            panel.setRequestRender(() => tui.requestRender());
+            panel.startOrphanCheck();
 
             const panelHeight = Math.max(
               10,

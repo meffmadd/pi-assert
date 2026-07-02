@@ -3,25 +3,29 @@ import type { SelectItem } from "@earendil-works/pi-tui";
 import {
   addRepo,
   buildRepoPickerItems,
+  classifyEntry,
   fetchRuleFile,
   fetchRuleFiles,
-  getInstalledAssertNames,
   getInstalledRepos,
   installRule,
   removeRule,
+  updateRule,
   REPO_ADD_ACTION,
+  type EntryState,
   type RuleEntries,
   type RuleEntry,
   type RuleFile,
 } from "../installer.js";
+import type { Assert } from "../engine.js";
 import {
   HINT_ENTER_CONFIRM,
   HINT_ENTER_INSTALL,
   HINT_ENTER_OPEN,
   HINT_ENTER_SELECT,
+  HINT_ENTER_UNINSTALL,
+  HINT_ENTER_UPDATE,
   HINT_ESC_BACK,
   HINT_ESC_CANCEL,
-  HINT_R_REMOVE,
   selectDialog,
   textInputDialog,
   type SelectDialogResult,
@@ -128,13 +132,25 @@ async function fetchAndPromptFile(
 // Step 3: pick an assert entry from a rule file
 // ---------------------------------------------------------------------------
 
-/** Entry picker marking installed entries with `✓`; `r` on an installed entry returns `{ removed: true }`. `installed` and `initialIndex` are caller-supplied so marks/highlight refresh without a reload. */
+/**
+ * Entry picker for a single rule file.  Each entry is classified against the
+ * installed asserts for this repo, and both the badge and the hintline reflect
+ * the focused entry's next action:
+ *
+ * - not installed → (no badge), `Enter install`
+ * - outdated       → `↑` badge, `Enter update`
+ * - installed      → `✓` badge, `Enter uninstall` (with a `y/n` confirm)
+ *
+ * `Enter` is a unified tri-state; the `r` Remove binding is gone (Enter on an
+ * installed assert uninstalls, so `r` is redundant).  The installed map is
+ * caller-supplied (built from `state.asserts`, refreshed by `reload` after each
+ * action) so marks/hints reflect the latest install state.
+ */
 async function promptAssertEntry(
   ctx: ExtensionContext,
   file: RuleFile,
   entries: RuleEntries,
-  repo: string,
-  installed: Set<string>,
+  installedMap: Map<string, Assert>,
   initialIndex?: number,
 ): Promise<SelectDialogResult<string>> {
   const fileName = file.path.replace(/^rules\//, "").replace(/\.json$/, "");
@@ -144,13 +160,35 @@ async function promptAssertEntry(
     const e = entries[name]!;
     return { value: name, label: name, description: e.description };
   });
+
+  const stateFor = (name: string): EntryState =>
+    classifyEntry(entries[name]!, installedMap.get(name));
+
   return selectDialog<string>(ctx, {
     title: fileName,
     items,
-    hint: [HINT_ENTER_INSTALL, HINT_R_REMOVE, HINT_ESC_CANCEL],
     initialIndex,
-    mark: (item) => (installed.has(item.value) ? theme.fg("success", "✓ ") : ""),
-    remove: { canRemove: (item) => installed.has(item.value) },
+    mark: (item) => {
+      const st = stateFor(item.value);
+      if (st === "outdated") return theme.fg("warning", "↑ ");
+      if (st === "installed") return theme.fg("success", "✓ ");
+      return "";
+    },
+    hintFor: (item) => {
+      const st = stateFor(item.value);
+      const enterHint =
+        st === "not-installed"
+          ? HINT_ENTER_INSTALL
+          : st === "outdated"
+            ? HINT_ENTER_UPDATE
+            : HINT_ENTER_UNINSTALL;
+      return [enterHint, HINT_ESC_CANCEL];
+    },
+    confirmOnSelect: {
+      shouldConfirm: (item) => stateFor(item.value) === "installed",
+      title: "Uninstall assert",
+      message: (item) => `  Uninstall "${item.value}"?`,
+    },
     detailFor: (value) => {
       const e = entries[value];
       if (!e) return undefined;
@@ -250,6 +288,32 @@ function removeAndReload(
   );
 }
 
+function updateAndReload(
+  ctx: ExtensionContext,
+  state: AssertsState,
+  name: string,
+  entry: RuleEntry,
+  installed: Assert,
+): void {
+  let updated: boolean;
+  try {
+    updated = updateRule(installed.path!, installed.source, name, entry);
+  } catch (err) {
+    ctx.ui.notify(
+      `pi-assert: failed to update "${name}" — ${String(err)}`,
+      "error",
+    );
+    return;
+  }
+  reload(ctx, state);
+  ctx.ui.notify(
+    updated
+      ? `pi-assert: updated "${name}".`
+      : `pi-assert: "${name}" was not found on disk; install instead.`,
+    "info",
+  );
+}
+
 // ---------------------------------------------------------------------------
 // runInstallWizard — pick repo → pick file → loop the entry picker for that
 // file (install/remove stay in the same file; Esc → file picker; Esc → exit).
@@ -282,17 +346,40 @@ export async function runInstallWizard(
     // Loop the entry picker for this file; Esc drops back to the file picker.
     let index: number | undefined;
     for (;;) {
+      // Build the installed map from the freshly-loaded state (refreshed by
+      // `reload` after each action) so badges/hints reflect the latest install.
+      const installedMap = new Map<string, Assert>();
+      for (const a of state.asserts) {
+        if (a.source === repo) installedMap.set(a.name, a);
+      }
+
       const result = await promptAssertEntry(
         ctx,
         file,
         entries,
-        repo,
-        getInstalledAssertNames(ctx.cwd, repo),
+        installedMap,
         index,
       );
       if (result.value === null) break;
-      if (result.removed) removeAndReload(ctx, state, repo, result.value);
-      else installAndReload(ctx, state, repo, result.value, entries[result.value]!);
+
+      // Tri-state Enter dispatch: classify the chosen name against the
+      // installed map and act accordingly.  `confirmOnSelect` already gated
+      // the uninstall confirm, so by the time we get here the user has
+      // confirmed (or no confirm was needed).
+      const name = result.value;
+      const repoEntry = entries[name]!;
+      const installed = installedMap.get(name);
+      const entryState = classifyEntry(repoEntry, installed);
+
+      if (entryState === "not-installed") {
+        installAndReload(ctx, state, repo, name, repoEntry);
+      } else if (entryState === "outdated") {
+        updateAndReload(ctx, state, name, repoEntry, installed!);
+      } else {
+        // "installed" → uninstall
+        removeAndReload(ctx, state, repo, name);
+      }
+
       index = result.index;
     }
 

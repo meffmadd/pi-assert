@@ -19,6 +19,12 @@ fail user-defined shell checks.
   (`iterSections`), and entry-shape validation (`validateEntryShape`). Shared
   by `engine.ts` (runtime loading) and `installer.ts` (install/remove/default
   writes) so neither re-derives the format.
+- **`pi-assert/installer.ts`** — GitHub API fetching (`fetchRuleFiles`/
+  `fetchRuleFile`, session-cached `fetchRepoEntries`), install/remove/update
+  writers (`installRule`/`removeRule`/`updateRule`), and pure outdated-detection
+  helpers (`cleanEntry`, `entryContentSignature`, `entryNeedsUpdate`,
+  `classifyEntry`). `cleanEntry` is the single owner of the on-disk record
+  shape, shared by `installRule` and `updateRule`.
 - **`pi-assert/executor.ts`** — runs active asserts per hook. The three hook
   handlers share one `runAsserts` core (filter → `when` → `shell`); each only
   supplies its candidate, env builder, and fail policy (`{value}` fail-fast vs
@@ -27,7 +33,17 @@ fail user-defined shell checks.
   `DetailList` (the selectable list with inline `shell:`/`when:` detail, used
   by both the `/asserts` panel and every install picker), `selectDialog`/
   `textInputDialog` (built on a shared `dialogShell`), and
-  `renderAssertDetail`.
+  `renderAssertDetail`. `selectDialog` supports a focus-aware dynamic hint
+  (`hintFor`) and a confirm-on-select guard (`confirmOnSelect`).
+- **`pi-assert/ui/install.ts`** — the install wizard (repo picker → file
+  picker → entry picker). The entry picker is a tri-state `Enter`: not
+  installed → install, outdated → update, installed → confirm → uninstall.
+  Classification uses the pure `classifyEntry` against the in-memory installed
+  map; `updateRule` writes to the owning file and preserves on-disk `default`.
+- **`pi-assert/ui/asserts.ts`** — the `/asserts` panel. Detects orphaned
+  asserts (installed names removed from their source repo) via an async,
+  session-cached `fetchRepoEntries` on panel open, marking them with `⚠` and
+  reusing the existing `r` remove flow.
 - **`skills/pi-assert/SKILL.md`** — bundled skill describing the format, hooks,
   filters, shell, env vars, and common patterns.
 
@@ -42,6 +58,16 @@ fail user-defined shell checks.
 - Project `.pi/asserts.json` overrides global `~/.pi/asserts.json` by key name.
 - No special handling for `"false"` — it's just the Unix `false` command
   (always exits 1).
+- **Outdated detection excludes `default`.** The content signature
+  (`entryContentSignature`) compares only repo-driven fields
+  (`description`, `hook`, `shell`, `filter`, `when`); `default` is a local
+  toggle, never a repo-driven change. `updateRule` preserves the on-disk
+  `default` so an update never clobbers a user's preference.
+- **Outdated is per-file; orphaned is panel-wide.** The install wizard entry
+  picker detects outdated asserts (installed name, content differs) using the
+  file already being browsed — no extra fetch. The `/asserts` panel detects
+  orphaned asserts (installed name missing from the repo) via a session-cached
+  `fetchRepoEntries`. Both degrade silently on network failure.
 - **Prefer one shared implementation over two.** Format parsing, entry
   validation, the assert run loop, list/dialog rendering, and text
   measuring/wrapping each live in a single module (`config.ts`, `executor.ts`,

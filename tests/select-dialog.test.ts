@@ -333,3 +333,182 @@ describe("selectDialog initialIndex", () => {
     assert.match(line!, /\[> \]\[alpha/, "highlight clamps to the first item");
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════
+// Dynamic focus-aware hint (hintFor)
+// ═══════════════════════════════════════════════════════════════════
+
+describe("selectDialog hintFor", () => {
+  it("renders the hint for the initially focused item", () => {
+    const s = setupDialog<string>();
+    selectDialog<string>(s.ctx, {
+      title: "T",
+      items: [
+        { value: "a", label: "alpha" },
+        { value: "b", label: "beta" },
+      ],
+      hintFor: (item) =>
+        item.value === "a"
+          ? [["Enter", "install"]]
+          : [["Enter", "uninstall"]],
+    });
+    const t = s.triple();
+    const lines = t.render(80);
+    assert.ok(
+      lines.some((l) => l.includes("[Enter] install") && !l.includes("uninstall")),
+      "initial hint reflects the first item (install)",
+    );
+  });
+
+  it("updates the hint when the focus moves to another item", () => {
+    const s = setupDialog<string>();
+    selectDialog<string>(s.ctx, {
+      title: "T",
+      items: [
+        { value: "a", label: "alpha" },
+        { value: "b", label: "beta" },
+      ],
+      hintFor: (item) =>
+        item.value === "a"
+          ? [["Enter", "install"]]
+          : [["Enter", "uninstall"]],
+    });
+    const t = s.triple();
+
+    // Move down to "b"
+    t.handleInput(DOWN);
+    const lines = t.render(80);
+    assert.ok(
+      lines.some((l) => l.includes("[Enter] uninstall")),
+      "hint reflects the newly focused item (uninstall) after moving down",
+    );
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// Confirm-on-select (Enter → y/n confirm)
+// ═══════════════════════════════════════════════════════════════════
+
+describe("selectDialog confirmOnSelect", () => {
+  it("Enter on a confirmable item shows the confirm shell", () => {
+    const s = setupDialog<string>();
+    selectDialog<string>(s.ctx, {
+      title: "T",
+      items: [{ value: "a", label: "alpha" }],
+      confirmOnSelect: {
+        shouldConfirm: () => true,
+        message: (it) => `  Uninstall "${it.value}"?`,
+      },
+    });
+    const t = s.triple();
+    t.handleInput(ENTER);
+    const lines = t.render(80);
+    assert.ok(
+      lines.some((l) => l.includes(`Uninstall "a"?`)),
+      "Enter on a confirmable item shows the confirm message",
+    );
+  });
+
+  it("y on the confirm resolves normally (removed: false)", async () => {
+    const s = setupDialog<string>();
+    const p = selectDialog<string>(s.ctx, {
+      title: "T",
+      items: [{ value: "a", label: "alpha" }],
+      confirmOnSelect: { shouldConfirm: () => true },
+    });
+    const t = s.triple();
+    t.handleInput(ENTER);
+    t.handleInput("y");
+    // confirmOnSelect resolves with removed: false — the caller classifies.
+    assert.deepEqual(await p, { value: "a", index: 0, removed: false });
+  });
+
+  it("n cancels the confirm and returns to the list", async () => {
+    const s = setupDialog<string>();
+    const p = selectDialog<string>(s.ctx, {
+      title: "T",
+      items: [{ value: "a", label: "alpha" }],
+      confirmOnSelect: { shouldConfirm: () => true },
+    });
+    const t = s.triple();
+    t.handleInput(ENTER);
+    t.handleInput("n");
+    // Back in the list — Esc cancels the whole dialog.
+    t.handleInput(ESC);
+    assert.deepEqual(await p, { value: null, index: 0, removed: false });
+  });
+
+  it("Esc cancels the confirm and returns to the list", async () => {
+    const s = setupDialog<string>();
+    const p = selectDialog<string>(s.ctx, {
+      title: "T",
+      items: [{ value: "a", label: "alpha" }],
+      confirmOnSelect: { shouldConfirm: () => true },
+    });
+    const t = s.triple();
+    t.handleInput(ENTER);
+    t.handleInput(ESC);
+    t.handleInput(ESC);
+    assert.deepEqual(await p, { value: null, index: 0, removed: false });
+  });
+
+  it("Enter on a non-confirmable item resolves immediately (no shell)", async () => {
+    const s = setupDialog<string>();
+    const p = selectDialog<string>(s.ctx, {
+      title: "T",
+      items: [{ value: "a", label: "alpha" }],
+      confirmOnSelect: { shouldConfirm: () => false },
+    });
+    const t = s.triple();
+    t.handleInput(ENTER);
+    assert.deepEqual(await p, { value: "a", index: 0, removed: false });
+    // No confirm body should have appeared.
+    const lines = t.render(80);
+    assert.ok(
+      !lines.some((l) => l.includes("Remove") || l.includes("Uninstall")),
+      "no confirm shell for a non-confirmable item",
+    );
+  });
+
+  it("uses the custom confirm title and message", () => {
+    const s = setupDialog<string>();
+    selectDialog<string>(s.ctx, {
+      title: "T",
+      items: [{ value: "a", label: "alpha" }],
+      confirmOnSelect: {
+        shouldConfirm: () => true,
+        title: "Uninstall assert",
+        message: (it) => `  Uninstall "${it.value}"?`,
+      },
+    });
+    const t = s.triple();
+    t.handleInput(ENTER);
+    const lines = t.render(80);
+    assert.ok(
+      lines.some((l) => l.includes("Uninstall assert")),
+      "confirm shell uses the custom title",
+    );
+    assert.ok(
+      lines.some((l) => l.includes(`Uninstall "a"?`)),
+      "confirm shell uses the custom message",
+    );
+  });
+
+  it("arrow keys are ignored while confirming", async () => {
+    const s = setupDialog<string>();
+    const p = selectDialog<string>(s.ctx, {
+      title: "T",
+      items: [
+        { value: "a", label: "alpha" },
+        { value: "b", label: "beta" },
+      ],
+      confirmOnSelect: { shouldConfirm: () => true },
+    });
+    const t = s.triple();
+    t.handleInput(ENTER);
+    t.handleInput(DOWN); // ignored while confirming
+    t.handleInput("y");
+    // Still on index 0 — the down arrow did not move the highlight.
+    assert.deepEqual(await p, { value: "a", index: 0, removed: false });
+  });
+});

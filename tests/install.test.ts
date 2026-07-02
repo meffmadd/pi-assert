@@ -11,7 +11,10 @@ import { tmpdir } from "node:os";
 import {
   fetchRuleFiles,
   fetchRuleFile,
+  fetchRepoEntries,
+  clearRepoEntriesCache,
   installRule,
+  updateRule,
   removeRule,
   addRepo,
   getInstalledRepos,
@@ -450,6 +453,131 @@ describe("fetchRuleFile", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════
+// fetchRepoEntries
+// ═══════════════════════════════════════════════════════════════════
+
+describe("fetchRepoEntries", () => {
+  // Each test gets a fresh cache so cached results don't bleed across tests.
+  before(() => clearRepoEntriesCache());
+  after(() => clearRepoEntriesCache());
+
+  /**
+   * Mock `fetch` so the trees call returns the given blob paths, and each
+   * contents call returns the given file contents (keyed by path).
+   */
+  function mockMultiFileFetch(
+    treeBlobs: string[],
+    fileContents: Record<string, unknown>,
+  ): void {
+    mock.method(globalThis, "fetch", (url: string) => {
+      if (url.includes("/git/trees/")) {
+        return mockJsonResponse({
+          sha: "tree-sha",
+          url,
+          tree: treeBlobs.map((p) => mockTreeBlob(p)),
+          truncated: false,
+        });
+      }
+      // contents call — match by the encoded path in the URL.
+      for (const [path, content] of Object.entries(fileContents)) {
+        if (url.includes(path.split("/").map(encodeURIComponent).join("/"))) {
+          return mockJsonResponse(
+            mockFileResponse(path.split("/").pop()!, path, content),
+          );
+        }
+      }
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+  }
+
+  it("flattens all entries from all files into a name→entry map", async () => {
+    clearRepoEntriesCache();
+    mockMultiFileFetch(
+      ["rules/defaults.json", "rules/security/writes.json"],
+      {
+        "rules/defaults.json": {
+          "rule-a": { description: "A.", hook: "tool_call", shell: "false" },
+          "rule-b": { description: "B.", hook: "tool_call", shell: "true" },
+        },
+        "rules/security/writes.json": {
+          "block-write": {
+            description: "Blocks writes.",
+            hook: "tool_call",
+            filter: { toolName: "write" },
+            shell: "false",
+          },
+        },
+      },
+    );
+
+    const result = await fetchRepoEntries("some/repo");
+    assert.strictEqual(result.size, 3);
+    assert.deepStrictEqual(result.get("rule-a"), {
+      description: "A.",
+      hook: "tool_call",
+      shell: "false",
+    });
+    assert.deepStrictEqual(result.get("block-write"), {
+      description: "Blocks writes.",
+      hook: "tool_call",
+      filter: { toolName: "write" },
+      shell: "false",
+    });
+  });
+
+  it("returns an empty map for a repo with no rule files", async () => {
+    clearRepoEntriesCache();
+    mockTreesFetch([]);
+    const result = await fetchRepoEntries("empty/repo");
+    assert.strictEqual(result.size, 0);
+  });
+
+  it("caches the result across calls (one fetch round per repo@ref)", async () => {
+    clearRepoEntriesCache();
+    let callCount = 0;
+    mock.method(globalThis, "fetch", (url: string) => {
+      callCount++;
+      if (url.includes("/git/trees/")) {
+        return mockJsonResponse({ tree: [], truncated: false });
+      }
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+
+    await fetchRepoEntries("cached/repo");
+    const firstRoundCalls = callCount;
+    await fetchRepoEntries("cached/repo"); // should hit cache
+    assert.strictEqual(callCount, firstRoundCalls, "second call makes no fetches");
+  });
+
+  it("does NOT cache failures (retryable on the next call)", async () => {
+    clearRepoEntriesCache();
+    let callCount = 0;
+    mock.method(globalThis, "fetch", () => {
+      callCount++;
+      throw new Error("connect ECONNREFUSED");
+    });
+
+    await assert.rejects(() => fetchRepoEntries("fail/repo"), /ECONNREFUSED/);
+    await assert.rejects(() => fetchRepoEntries("fail/repo"), /ECONNREFUSED/);
+    assert.ok(callCount > 1, "second call re-fetched (failure was not cached)");
+  });
+
+  it("skips invalid entries (missing description/hook/shell)", async () => {
+    clearRepoEntriesCache();
+    mockMultiFileFetch(["rules/defaults.json"], {
+      "rules/defaults.json": {
+        valid: { description: "V.", hook: "tool_call", shell: "true" },
+        "no-desc": { hook: "tool_call", shell: "false" },
+        "no-shell": { description: "D.", hook: "tool_call" },
+        nil: null,
+      },
+    });
+    const result = await fetchRepoEntries("mixed/repo");
+    assert.deepStrictEqual([...result.keys()], ["valid"]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
 // installRule
 // ═══════════════════════════════════════════════════════════════════
 
@@ -743,6 +871,218 @@ describe("removeRule", () => {
       }
     });
   }
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// updateRule
+// ═══════════════════════════════════════════════════════════════════
+
+describe("updateRule", () => {
+  type Case = {
+    label: string;
+    initialJson: object;
+    path: (cwd: string) => string;
+    source: string;
+    name: string;
+    entry: RuleEntry;
+    expected: object;
+    expectedResult: boolean;
+  };
+
+  const cases: Case[] = [
+    {
+      label: "updates shell content to match the repo entry",
+      initialJson: {
+        "some/repo": {
+          "my-rule": { description: "Old desc.", hook: "tool_call", shell: "old" },
+        },
+      },
+      path: (cwd) => join(cwd, ".pi", "asserts.json"),
+      source: "some/repo",
+      name: "my-rule",
+      entry: { description: "New desc.", hook: "tool_call", shell: "new" },
+      expected: {
+        "some/repo": {
+          "my-rule": { description: "New desc.", hook: "tool_call", shell: "new" },
+        },
+      },
+      expectedResult: true,
+    },
+    {
+      label: "preserves the on-disk default:true (ignores repo default)",
+      initialJson: {
+        "some/repo": {
+          "my-rule": {
+            description: "Old.",
+            hook: "tool_call",
+            shell: "old",
+            default: true,
+          },
+        },
+      },
+      path: (cwd) => join(cwd, ".pi", "asserts.json"),
+      source: "some/repo",
+      name: "my-rule",
+      entry: { description: "New.", hook: "tool_call", shell: "new" },
+      expected: {
+        "some/repo": {
+          "my-rule": {
+            description: "New.",
+            hook: "tool_call",
+            shell: "new",
+            default: true,
+          },
+        },
+      },
+      expectedResult: true,
+    },
+    {
+      label: "preserves absent default when repo entry has default:true",
+      initialJson: {
+        "some/repo": {
+          "my-rule": { description: "Old.", hook: "tool_call", shell: "old" },
+        },
+      },
+      path: (cwd) => join(cwd, ".pi", "asserts.json"),
+      source: "some/repo",
+      name: "my-rule",
+      entry: { description: "New.", hook: "tool_call", shell: "new", default: true },
+      expected: {
+        "some/repo": {
+          // default must NOT appear — the installed entry had none.
+          "my-rule": { description: "New.", hook: "tool_call", shell: "new" },
+        },
+      },
+      expectedResult: true,
+    },
+    {
+      label: "writes to the given path (not always the project file)",
+      initialJson: {
+        "some/repo": {
+          "my-rule": { description: "Old.", hook: "tool_call", shell: "old" },
+        },
+      },
+      path: (cwd) => join(cwd, "custom", "asserts.json"),
+      source: "some/repo",
+      name: "my-rule",
+      entry: { description: "New.", hook: "tool_call", shell: "new" },
+      expected: {
+        "some/repo": {
+          "my-rule": { description: "New.", hook: "tool_call", shell: "new" },
+        },
+      },
+      expectedResult: true,
+    },
+    {
+      label: "updates filter and when fields",
+      initialJson: {
+        "some/repo": {
+          "my-rule": { description: "Old.", hook: "tool_call", shell: "old" },
+        },
+      },
+      path: (cwd) => join(cwd, ".pi", "asserts.json"),
+      source: "some/repo",
+      name: "my-rule",
+      entry: {
+        description: "New.",
+        hook: "tool_call",
+        filter: { toolName: "bash" },
+        when: "true",
+        shell: "new",
+      },
+      expected: {
+        "some/repo": {
+          "my-rule": {
+            description: "New.",
+            hook: "tool_call",
+            filter: { toolName: "bash" },
+            when: "true",
+            shell: "new",
+          },
+        },
+      },
+      expectedResult: true,
+    },
+    {
+      label: "returns false when the section is missing",
+      initialJson: { local: { rule: { hook: "tool_call", shell: "true" } } },
+      path: (cwd) => join(cwd, ".pi", "asserts.json"),
+      source: "absent/repo",
+      name: "my-rule",
+      entry: { description: "New.", hook: "tool_call", shell: "new" },
+      expected: { local: { rule: { hook: "tool_call", shell: "true" } } },
+      expectedResult: false,
+    },
+    {
+      label: "returns false when the name is missing from the section",
+      initialJson: {
+        "some/repo": { "other-rule": { hook: "tool_call", shell: "true" } },
+      },
+      path: (cwd) => join(cwd, ".pi", "asserts.json"),
+      source: "some/repo",
+      name: "my-rule",
+      entry: { description: "New.", hook: "tool_call", shell: "new" },
+      expected: {
+        "some/repo": { "other-rule": { hook: "tool_call", shell: "true" } },
+      },
+      expectedResult: false,
+    },
+  ];
+
+  for (const { label, initialJson, path, source, name, entry, expected, expectedResult } of cases) {
+    it(label, () => {
+      const cwd = join(tmpRoot, `update-${label.replace(/[^a-z0-9-]/gi, "-")}`);
+      const filePath = path(cwd);
+      mkdirSync(join(filePath, ".."), { recursive: true });
+      writeFileSync(filePath, JSON.stringify(initialJson));
+
+      const result = updateRule(filePath, source, name, entry);
+      assert.strictEqual(result, expectedResult);
+
+      const raw = readFileSync(filePath, "utf-8");
+      const parsed = JSON.parse(raw);
+      assert.deepStrictEqual(parsed, expected);
+    });
+  }
+
+  it("produces a clean record matching installRule's output shape", () => {
+    const cwd = join(tmpRoot, "update-clean-shape");
+    const filePath = join(cwd, ".pi", "asserts.json");
+    mkdirSync(join(filePath, ".."), { recursive: true });
+    writeFileSync(
+      filePath,
+      JSON.stringify({
+        "some/repo": {
+          "my-rule": { description: "Old.", hook: "tool_call", shell: "old" },
+        },
+      }),
+    );
+
+    const entry: RuleEntry = {
+      description: "New.",
+      hook: "tool_call",
+      filter: { toolName: "bash" },
+      when: "true",
+      shell: "new",
+    };
+    updateRule(filePath, "some/repo", "my-rule", entry);
+
+    // An install of the same entry should produce the same on-disk record
+    // (minus the default-preservation difference, which doesn't apply here
+    // since neither side has a default).
+    const installCwd = join(tmpRoot, "update-clean-shape-install");
+    installRule(installCwd, "some/repo", "my-rule", entry);
+
+    const updated = JSON.parse(readFileSync(filePath, "utf-8"));
+    const installed = JSON.parse(
+      readFileSync(join(installCwd, ".pi", "asserts.json"), "utf-8"),
+    );
+    // Both should have the same record for "my-rule" under "some/repo".
+    assert.deepStrictEqual(
+      updated["some/repo"]["my-rule"],
+      installed["some/repo"]["my-rule"],
+    );
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════

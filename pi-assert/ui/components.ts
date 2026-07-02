@@ -82,6 +82,8 @@ export function renderAssertDetail(
 export const HINT_ENTER_SELECT: [string, string] = ["Enter", "select"];
 export const HINT_ENTER_OPEN: [string, string] = ["Enter", "open"];
 export const HINT_ENTER_INSTALL: [string, string] = ["Enter", "install"];
+export const HINT_ENTER_UPDATE: [string, string] = ["Enter", "update"];
+export const HINT_ENTER_UNINSTALL: [string, string] = ["Enter", "uninstall"];
 export const HINT_ENTER_CONFIRM: [string, string] = ["Enter", "confirm"];
 export const HINT_ENTER_SPACE_ENABLE: [string, string] = ["Enter/Space", "enable"];
 export const HINT_ESC_CANCEL: [string, string] = ["Esc", "to cancel"];
@@ -217,6 +219,12 @@ export interface DialogShellOptions {
   hint?: [string, string][];
   /** Default hint segments when the caller omits one. */
   defaultHint?: [string, string][];
+  /**
+   * Override the hint with a custom component (e.g. a dynamic, focus-aware
+   * hint that re-reads the selection on each render).  When set, `hint` and
+   * `defaultHint` are ignored.
+   */
+  hintComponent?: Component;
   maxHeight: number;
 }
 
@@ -228,13 +236,14 @@ function dialogShell(
   render: (w: number) => string[];
   invalidate: () => void;
 } {
-  const container = titledBox(theme, opts.title, [
-    opts.body,
+  const hintComp =
+    opts.hintComponent ??
     new HintLine(
       theme,
       opts.hint ?? opts.defaultHint ?? [HINT_ENTER_SELECT, HINT_ESC_CANCEL],
-    ),
-  ]);
+    );
+
+  const container = titledBox(theme, opts.title, [opts.body, hintComp]);
 
   return {
     render: (w: number) => container.render(w),
@@ -299,6 +308,25 @@ export async function selectDialog<T>(
     mark?: (item: SelectItem) => string;
     /** Enable the `r` Remove keybinding; `canRemove` gates which items are removable. */
     remove?: { canRemove: (item: SelectItem) => boolean };
+    /**
+     * Focus-aware dynamic hint.  Called with the currently highlighted item
+     * on each render, so the hintline reflects the focused row's next action
+     * (e.g. install / update / uninstall).  Takes precedence over `hint`.
+     */
+    hintFor?: (item: SelectItem) => [string, string][];
+    /**
+     * Require a `y/n` confirm before `Enter` resolves the select for items
+     * where `shouldConfirm` returns true (e.g. a destructive uninstall).
+     * On confirm the select resolves **normally** (`removed: false`) — the
+     * caller classifies the result; the confirm is purely a guard.
+     */
+    confirmOnSelect?: {
+      shouldConfirm: (item: SelectItem) => boolean;
+      /** Confirm dialog title (default "Remove assert"). */
+      title?: string;
+      /** Confirm message builder (default `Remove "{value}"?`). */
+      message?: (item: SelectItem) => string;
+    };
   },
 ): Promise<SelectDialogResult<T>> {
   const hasDetail = !!opts.detailFor;
@@ -362,26 +390,64 @@ export async function selectDialog<T>(
         Math.min(opts.initialIndex, opts.items.length - 1),
       );
     }
-    list.onSelect = (item) =>
+    list.onSelect = (item) => {
+      // Enter on a confirmable item swaps to the confirm shell instead of
+      // resolving immediately.  The confirm resolves the select NORMALLY
+      // (removed: false); the caller classifies the result.  This is the
+      // guard for destructive Enter actions (e.g. uninstall).
+      if (opts.confirmOnSelect?.shouldConfirm(item)) {
+        confirmItem = item;
+        confirmIsRemove = false;
+        tui.requestRender();
+        return;
+      }
       done({ value: item.value as T, index: list.selectedIndex, removed: false });
+    };
     list.onCancel = () =>
       done({ value: null, index: list.selectedIndex, removed: false });
+
+    // Dynamic, focus-aware hint: re-reads the highlighted item on each render
+    // so the hintline reflects the focused row's next action.
+    const hintComponent = opts.hintFor
+      ? ({
+          render: (w: number) => {
+            const item = opts.items[list.selectedIndex];
+            const items = item
+              ? opts.hintFor!(item)
+              : (opts.hint ?? [HINT_ENTER_SELECT, HINT_ESC_CANCEL]);
+            return renderHintLine(theme, w, items);
+          },
+          invalidate() {},
+        } as Component)
+      : undefined;
 
     const shell = dialogShell(ctx, theme, {
       title: opts.title,
       body: list,
       hint: opts.hint,
+      hintComponent,
       maxHeight,
     });
 
-    // `r` on a removable item swaps the body to a `Remove "x"?` confirm;
-    // `y` resolves `removed: true`, `n`/Esc returns to the list.
+    // A confirm shell is needed when either the `r` Remove flow or the
+    // `confirmOnSelect` Enter flow can trigger a confirm.  Both reuse the same
+    // `confirmItem` state; `confirmIsRemove` distinguishes the `r`-triggered
+    // path (resolves `removed: true`) from the Enter-triggered confirm
+    // (resolves `removed: false`, caller classifies).
+    const hasConfirm = !!opts.remove || !!opts.confirmOnSelect;
     let confirmItem: SelectItem | null = null;
-    const confirmShell = opts.remove
+    let confirmIsRemove = false;
+    const confirmShell = hasConfirm
       ? dialogShell(ctx, theme, {
-          title: "Remove assert",
+          title: opts.confirmOnSelect?.title ?? "Remove assert",
           body: {
-            render: () => [`  Remove "${confirmItem?.value ?? ""}"?`],
+            render: () => {
+              const item = confirmItem;
+              if (opts.confirmOnSelect?.message && item) {
+                return [opts.confirmOnSelect.message(item)];
+              }
+              return [`  Remove "${item?.value ?? ""}"?`];
+            },
             invalidate() {},
           } as Component,
           hint: [
@@ -405,7 +471,7 @@ export async function selectDialog<T>(
             done({
               value: confirmItem.value as T,
               index: list.selectedIndex,
-              removed: true,
+              removed: confirmIsRemove,
             });
             return;
           }
@@ -421,6 +487,7 @@ export async function selectDialog<T>(
           const item = opts.items[list.selectedIndex];
           if (item && opts.remove.canRemove(item)) {
             confirmItem = item;
+            confirmIsRemove = true;
           } else {
             ctx.ui.notify("Only installed asserts can be removed", "info");
           }
@@ -463,6 +530,12 @@ export interface DetailListOptions<T> {
   renderRow: (item: T, selected: boolean, width: number) => string;
   /** Resolve the shell/when preview for an item. `undefined` skips the detail. */
   detailFor: (item: T) => { shell: string; when?: string } | undefined;
+  /**
+   * Optional lines rendered above the shell/when detail block for the
+   * focused row (e.g. the `/asserts` panel's "removed from source repo"
+   * warning for orphaned asserts).  Returns `[]` for no prefix.
+   */
+  detailPrefix?: (item: T) => string[];
 }
 
 export function renderDetailList<T>(
@@ -496,6 +569,8 @@ export function renderDetailList<T>(
 
     // Detail block directly under the highlighted row.
     if (selected) {
+      const prefixLines = opts.detailPrefix?.(item) ?? [];
+      for (const l of prefixLines) lines.push(l);
       const entry = detailFor(item);
       if (entry) lines.push(...renderAssertDetail(theme, width, entry));
     }

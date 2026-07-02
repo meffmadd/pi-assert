@@ -121,17 +121,31 @@ define an assert with the same `name` will overwrite each other on
 install (last install wins); the installer shows a warning notification
 when an install overwrites an existing assert.
 
-**Install flow.** After installing or removing an assert, the entry
-picker reopens for the *same* file on the last highlighted row so you can
-install or remove several asserts from it in a row; press `Esc` to drop
-back to the file picker, and `Esc` again to exit.  Asserts you've already
-installed under the chosen repo are marked with a leading `✓` in the entry
-picker.
+**Install flow.** After installing, updating, or removing an assert, the
+entry picker reopens for the *same* file on the last highlighted row so you
+can act on several asserts from it in a row; press `Esc` to drop back to the
+file picker, and `Esc` again to exit.
 
-From the entry picker, press `r` on an installed (`✓`) entry to remove it —
-an inline `Remove "name"? y/n` confirm appears; `y` removes it from
-`.pi/asserts.json` and reloads, `n`/`Esc` cancels.  `r` on an entry that
-isn't installed notifies instead (only installed asserts can be removed).
+Each entry is classified against your local install for the chosen repo, and
+both the badge and the hintline reflect the focused entry's state:
+
+| Focused entry state        | Badge | Hintline          | `Enter` does                          |
+|----------------------------|-------|-------------------|----------------------------------------|
+| not installed              | (none)| `Enter install`   | install it                             |
+| installed, content differs | `↑`   | `Enter update`    | update in place (preserves `default`)  |
+| installed, up to date      | `✓`   | `Enter uninstall` | confirm → uninstall                    |
+
+`Enter` is a unified tri-state: install, update, or (with a `y/n` confirm)
+uninstall. The `default` flag is a local-only preference — it's excluded from
+the content comparison, so an update never clobbers your `default` toggle.
+Updates write to the owning file (project override or global), preserving the
+on-disk `default`.
+
+**Orphaned asserts.** The `/asserts` panel fetches each repo's entries (cached
+per session) and marks installed asserts whose name no longer exists upstream
+with a `⚠` badge. Remove an orphaned assert with the existing `r` → `y/n`
+confirm flow. The fetch is async — badges appear once it settles; network
+failures degrade silently (no `⚠`, retryable on the next open).
 
 ## Common Patterns
 
@@ -346,6 +360,6 @@ enable/disable the assert right now.
 
 In the `/asserts` panel, press `d` to disable every active assert at once
 (the selection persists across sessions), or `r` on the focused assert to
-remove it from its `asserts.json` (non-local sources only; prompts for
-confirmation). The `d Disable all` hint only appears when at least one
-assert is active.
+remove it from its `asserts.json` (prompts for confirmation). The `d Disable
+all` hint only appears when at least one assert is active. Asserts removed
+from their source repo (orphaned) are marked with `⚠`.
