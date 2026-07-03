@@ -94,12 +94,12 @@ export const HINT_R_REMOVE: [string, string] = ["r", "Remove"];
 export const HINT_I_INSTALL_ASSERTS: [string, string] = ["i", "Install asserts"];
 
 /** Format a single `[key, action]` segment (no indent/separator). */
-export function formatHintItem(theme: Theme, item: [string, string]): string {
+function formatHintItem(theme: Theme, item: [string, string]): string {
   return theme.fg("accent", item[0]) + theme.fg("dim", " " + item[1]);
 }
 
 /** Format the full hint line from `[key, action]` segments. */
-export function formatHint(theme: Theme, items: [string, string][]): string {
+function formatHint(theme: Theme, items: [string, string][]): string {
   const dim = (s: string) => theme.fg("dim", s);
   const indent = dim("  ");
   const separator = dim(" · ");
@@ -144,7 +144,7 @@ export function renderHintLine(
 }
 
 /** Component wrapper around `renderHintLine` that receives the dialog width. */
-export class HintLine implements Component {
+class HintLine implements Component {
   constructor(
     private theme: Theme,
     private items: [string, string][],
@@ -162,8 +162,8 @@ export class HintLine implements Component {
 // the same size. Fixed character width, with a matching floor so narrow
 // terminals still get a usable minimum.
 // ---------------------------------------------------------------------------
-export const DIALOG_WIDTH = 80;
-export const DIALOG_MIN_WIDTH = 80;
+const DIALOG_WIDTH = 80;
+const DIALOG_MIN_WIDTH = 80;
 
 // ---------------------------------------------------------------------------
 // OverlayBox — the single owner of the pi-assert overlay background.
@@ -211,7 +211,7 @@ function titledBox(theme: Theme, title: string, children: Component[]): Containe
 // border + hint + overlay geometry live in one place; each only supplies
 // its body component and input handler.
 // ---------------------------------------------------------------------------
-export interface DialogShellOptions {
+interface DialogShellOptions {
   title: string;
   /** Body component rendered between the title border and the hint. */
   body: Component;
@@ -229,7 +229,6 @@ export interface DialogShellOptions {
 }
 
 function dialogShell(
-  ctx: ExtensionContext,
   theme: Theme,
   opts: DialogShellOptions,
 ): {
@@ -421,7 +420,7 @@ export async function selectDialog<T>(
         } as Component)
       : undefined;
 
-    const shell = dialogShell(ctx, theme, {
+    const shell = dialogShell(theme, {
       title: opts.title,
       body: list,
       hint: opts.hint,
@@ -438,7 +437,7 @@ export async function selectDialog<T>(
     let confirmItem: SelectItem | null = null;
     let confirmIsRemove = false;
     const confirmShell = hasConfirm
-      ? dialogShell(ctx, theme, {
+      ? dialogShell(theme, {
           title: opts.confirmOnSelect?.title ?? "Remove assert",
           body: {
             render: () => {
@@ -675,7 +674,7 @@ export async function textInputDialog(
     body.addChild(new Text(theme.fg("muted", opts.label), 1, 0));
     body.addChild(inputDisplay);
 
-    const shell = dialogShell(ctx, theme, {
+    const shell = dialogShell(theme, {
       title: opts.title,
       body,
       hint: opts.hint,

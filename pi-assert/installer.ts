@@ -541,14 +541,6 @@ export function getInstalledRepos(cwd: string): string[] {
   return current.repos ?? [];
 }
 
-/** Assert names installed under `repo` in `.pi/asserts.json`. Empty on a missing/broken file (best-effort). */
-export function getInstalledAssertNames(cwd: string, repo: string): Set<string> {
-  const current = readProjectFile(cwd);
-  const section = current[repo];
-  if (!section || typeof section !== "object") return new Set();
-  return new Set(Object.keys(section as Record<string, unknown>));
-}
-
 /**
  * Add a repo to the `repos` array in the project config.
  * No-op if the repo is already present.

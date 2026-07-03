@@ -184,6 +184,13 @@ async function promptAssertEntry(
             : HINT_ENTER_UNINSTALL;
       return [enterHint, HINT_ESC_CANCEL];
     },
+    // `Enter` on an `"installed"` entry swaps to a y/n uninstall confirm
+    // before the dialog resolves.  This `shouldConfirm` predicate MUST stay
+    // in sync with the dispatch in `runInstallWizard` (the `"installed"`
+    // branch calls `removeAndReload`): the confirm is purely a guard, and the
+    // dispatch re-derives the state, so a mismatch would confirm-then-take-
+    // the-wrong-action.  Both branch off the same `stateFor(...) ===
+    // "installed"` test.
     confirmOnSelect: {
       shouldConfirm: (item) => stateFor(item.value) === "installed",
       title: "Uninstall assert",
@@ -295,9 +302,19 @@ function updateAndReload(
   entry: RuleEntry,
   installed: Assert,
 ): void {
+  // `installed.path` is set for repo-sourced asserts (the only kind the
+  // wizard reaches this branch for).  Guard explicitly instead of asserting
+  // via `!` so a future caller with a local assert degrades gracefully.
+  if (!installed.path) {
+    ctx.ui.notify(
+      `pi-assert: cannot update "${name}" — assert has no owning file.`,
+      "error",
+    );
+    return;
+  }
   let updated: boolean;
   try {
-    updated = updateRule(installed.path!, installed.source, name, entry);
+    updated = updateRule(installed.path, installed.source, name, entry);
   } catch (err) {
     ctx.ui.notify(
       `pi-assert: failed to update "${name}" — ${String(err)}`,
@@ -363,9 +380,11 @@ export async function runInstallWizard(
       if (result.value === null) break;
 
       // Tri-state Enter dispatch: classify the chosen name against the
-      // installed map and act accordingly.  `confirmOnSelect` already gated
-      // the uninstall confirm, so by the time we get here the user has
-      // confirmed (or no confirm was needed).
+      // installed map and act accordingly.  `confirmOnSelect` in
+      // `promptAssertEntry` already gated the uninstall confirm for the
+      // `"installed"` branch below — its `shouldConfirm` predicate MUST match
+      // this dispatch's uninstall branch (both test `stateFor ===
+      // "installed"`); see the comment there.
       const name = result.value;
       const repoEntry = entries[name]!;
       const installed = installedMap.get(name);
