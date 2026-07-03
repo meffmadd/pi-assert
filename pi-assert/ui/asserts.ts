@@ -14,6 +14,7 @@ import {
   HINT_I_INSTALL_ASSERTS,
   HINT_R_REMOVE,
   HINT_T_TOGGLE_DEFAULT,
+  HINT_TAB_CYCLE_SECTION,
   OverlayBox,
   SectionNavigator,
   dialogOverlay,
@@ -465,6 +466,9 @@ export class AssertsPanel {
     }
     items.push(HINT_R_REMOVE);
     items.push(HINT_I_INSTALL_ASSERTS);
+    if (this.groups.length > 1) {
+      items.push(HINT_TAB_CYCLE_SECTION);
+    }
     items.push(HINT_ESC_CANCEL);
     return renderHintLine(this.theme, width, items);
   }
@@ -581,6 +585,20 @@ export class AssertsPanel {
         this.state.persist();
         this.state.updateStatus(ctx);
       }
+      return undefined;
+    }
+
+    // ── Tab / Shift+Tab: cycle focus between sections (local + repos) ──
+    // A discrete jump that preserves each section's remembered row — Tab
+    // away and Shift+Tab back returns to the same assert.  No-op with a
+    // single section.  `matchesKey("\t", "t")` is false (distinct
+    // codepoints), so Tab never collides with the `t` toggle-default key.
+    if (matchesKey(data, Key.tab)) {
+      this.nav.cycleSection("next");
+      return undefined;
+    }
+    if (matchesKey(data, Key.shift("tab"))) {
+      this.nav.cycleSection("prev");
       return undefined;
     }
 

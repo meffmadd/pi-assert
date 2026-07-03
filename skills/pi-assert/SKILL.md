@@ -363,3 +363,11 @@ In the `/asserts` panel, press `d` to disable every active assert at once
 remove it from its `asserts.json` (prompts for confirmation). The `d Disable
 all` hint only appears when at least one assert is active. Asserts removed
 from their source repo (orphaned) are marked with `⚠`.
+
+## Cycling between sections
+
+The `/asserts` panel groups asserts by source (`local`, then each repo
+alphabetically). Press `Tab` / `Shift+Tab` to cycle focus between sections
+with wraparound (last wraps to first). It's a discrete jump that preserves
+each section's remembered row — Tab away and Shift+Tab back lands you on
+the same assert. The hint only appears when more than one section exists.

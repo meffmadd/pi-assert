@@ -92,6 +92,7 @@ export const HINT_T_TOGGLE_DEFAULT: [string, string] = ["t", "Toggle default"];
 export const HINT_D_DISABLE_ALL: [string, string] = ["d", "Disable all"];
 export const HINT_R_REMOVE: [string, string] = ["r", "Remove"];
 export const HINT_I_INSTALL_ASSERTS: [string, string] = ["i", "Install asserts"];
+export const HINT_TAB_CYCLE_SECTION: [string, string] = ["Tab", "cycle section"];
 
 /** Format a single `[key, action]` segment (no indent/separator). */
 function formatHintItem(theme: Theme, item: [string, string]): string {
@@ -755,6 +756,22 @@ export class SectionNavigator<T> {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Discrete cycle jump: `Tab` → next section, `Shift+Tab` → previous,
+   * wrapping last→first and first→last.  Unlike `cross`, this is a
+   * deliberate jump that preserves each section's remembered index — Tab
+   * away and Shift+Tab back returns to the same row (the standard
+   * "tab between fields" metaphor).  Returns `false` (no-op) when there
+   * are fewer than two sections.
+   */
+  cycleSection(dir: "next" | "prev"): boolean {
+    if (this.sections.length < 2) return false;
+    const n = this.sections.length;
+    this.focus =
+      dir === "next" ? (this.focus + 1) % n : (this.focus - 1 + n) % n;
+    return true;
   }
 
   /**

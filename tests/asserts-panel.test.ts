@@ -516,6 +516,142 @@ describe("AssertsPanel", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════
+// Section cycling — Tab / Shift+Tab jump focus between sections
+// ═══════════════════════════════════════════════════════════════════
+
+describe("AssertsPanel section cycling (Tab/Shift+Tab)", () => {
+  it("cycleSection next wraps last→first across three sections", () => {
+    const panel = makePanel([
+      makeAssert("local-1"),
+      makeAssert("aaa-1", "repo/aaa"),
+      makeAssert("zzz-1", "repo/zzz"),
+    ]);
+    // local → repo/aaa → repo/zzz → local (wrap)
+    panel.nav.cycleSection("next");
+    assert.equal(panel.nav.focusedSection, 1);
+    panel.nav.cycleSection("next");
+    assert.equal(panel.nav.focusedSection, 2);
+    panel.nav.cycleSection("next");
+    assert.equal(panel.nav.focusedSection, 0, "wraps last→first");
+  });
+
+  it("cycleSection prev wraps first→last", () => {
+    const panel = makePanel([
+      makeAssert("local-1"),
+      makeAssert("aaa-1", "repo/aaa"),
+      makeAssert("zzz-1", "repo/zzz"),
+    ]);
+    panel.nav.cycleSection("prev");
+    assert.equal(panel.nav.focusedSection, 2, "wraps first→last");
+    panel.nav.cycleSection("prev");
+    assert.equal(panel.nav.focusedSection, 1);
+  });
+
+  it("cycleSection preserves each section's remembered row", () => {
+    const panel = makePanel([
+      makeAssert("local-1"),
+      makeAssert("local-2"),
+      makeAssert("aaa-1", "repo/aaa"),
+      makeAssert("aaa-2", "repo/aaa"),
+      makeAssert("aaa-3", "repo/aaa"),
+    ]);
+    // Walk down two rows in the local section.
+    panel.nav.moveWithin("down");
+    panel.nav.moveWithin("down");
+    assert.equal(panel.nav.focusedIndex, 1, "local section at row 1");
+
+    // Tab to repo/aaa (fresh section, remembers its own row 0), then back.
+    panel.nav.cycleSection("next");
+    assert.equal(panel.nav.focusedSection, 1);
+    assert.equal(panel.nav.focusedIndex, 0, "repo section starts at its row 0");
+    panel.nav.cycleSection("prev");
+    assert.equal(panel.nav.focusedSection, 0);
+    assert.equal(panel.nav.focusedIndex, 1, "local row restored after round-trip");
+  });
+
+  it("cycleSection is a no-op with a single section", () => {
+    const panel = makePanel([
+      makeAssert("only-1"),
+      makeAssert("only-2"),
+    ]);
+    const moved = panel.nav.cycleSection("next");
+    assert.equal(moved, false);
+    assert.equal(panel.nav.focusedSection, 0, "focus unchanged");
+  });
+
+  it("Tab key moves focus to the next section", () => {
+    const panel = makePanel([
+      makeAssert("local-1"),
+      makeAssert("aaa-1", "repo/aaa"),
+      makeAssert("zzz-1", "repo/zzz"),
+    ]);
+    panel.handleInput("\t", makeCtx());
+    assert.equal(panel.nav.focusedSection, 1, "Tab advances to next section");
+  });
+
+  it("Shift+Tab (\x1b[Z) moves focus to the previous section", () => {
+    const panel = makePanel([
+      makeAssert("local-1"),
+      makeAssert("aaa-1", "repo/aaa"),
+      makeAssert("zzz-1", "repo/zzz"),
+    ]);
+    // Move to the middle section first.
+    panel.nav.cycleSection("next");
+    assert.equal(panel.nav.focusedSection, 1);
+    // Shift+Tab via its real escape sequence.
+    panel.handleInput("\x1b[Z", makeCtx());
+    assert.equal(panel.nav.focusedSection, 0, "Shift+Tab returns to previous section");
+  });
+
+  it("Tab is a no-op with a single section", () => {
+    const panel = makePanel([
+      makeAssert("only-1"),
+      makeAssert("only-2"),
+    ]);
+    panel.handleInput("\t", makeCtx());
+    assert.equal(panel.nav.focusedSection, 0, "focus stays on the only section");
+  });
+
+  it("Tab is ignored while a remove confirm is open", () => {
+    const panel = makePanel([
+      makeAssert("local-1"),
+      makeAssert("aaa-1", "repo/aaa"),
+    ]);
+    // Open the remove confirm on the focused local assert.
+    panel.handleInput("r", makeCtx());
+    const focusBefore = panel.nav.focusedSection;
+    panel.handleInput("\t", makeCtx());
+    assert.equal(
+      panel.nav.focusedSection,
+      focusBefore,
+      "Tab does not move focus during confirm",
+    );
+    // Confirm is still open (Tab didn't dismiss it).
+    const lines = panel.render(80);
+    assert.ok(
+      lines.some((l) => l.includes(`Remove "local-1"?`)),
+      "confirm dialog remains open after Tab",
+    );
+  });
+
+  it("shows the Tab cycle hint only with more than one section", () => {
+    const multi = makePanel([
+      makeAssert("local-1"),
+      makeAssert("aaa-1", "repo/aaa"),
+    ]);
+    const multiHint = multi.render(80, 20).find((l) => l.includes("Tab"));
+    assert.ok(multiHint, "Tab hint shown with multiple sections");
+
+    const single = makePanel([
+      makeAssert("only-1"),
+      makeAssert("only-2"),
+    ]);
+    const singleHint = single.render(80, 20).find((l) => l.includes("Tab"));
+    assert.ok(!singleHint, "Tab hint hidden with a single section");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
 // Orphaned detection — installed asserts removed from their source repo
 // ═══════════════════════════════════════════════════════════════════
 
