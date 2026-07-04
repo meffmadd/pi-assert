@@ -85,7 +85,7 @@ export const HINT_ENTER_INSTALL: [string, string] = ["Enter", "install"];
 export const HINT_ENTER_UPDATE: [string, string] = ["Enter", "update"];
 export const HINT_ENTER_UNINSTALL: [string, string] = ["Enter", "uninstall"];
 export const HINT_ENTER_CONFIRM: [string, string] = ["Enter", "confirm"];
-export const HINT_ENTER_SPACE_ENABLE: [string, string] = ["Enter/Space", "enable"];
+export const HINT_ENTER_ENABLE: [string, string] = ["Enter", "enable"];
 export const HINT_ESC_CANCEL: [string, string] = ["Esc", "to cancel"];
 export const HINT_ESC_BACK: [string, string] = ["Esc", "back"];
 export const HINT_T_TOGGLE_DEFAULT: [string, string] = ["t", "Toggle default"];
@@ -644,6 +644,16 @@ export class DetailList<T = SelectItem> implements Component {
 }
 
 // ---------------------------------------------------------------------------
+// filterPrintable — strip control chars, keep everything else (incl. space).
+// Shared by `textInputDialog` and the `/asserts` panel search mode so paste
+// works and Space is a valid query character. Mirrors the inline
+// `data.replace(/[\x00-\x1F\x7F]/g, "")` previously in textInputDialog.
+// ---------------------------------------------------------------------------
+export function filterPrintable(data: string): string {
+  return data.replace(/[\x00-\x1F\x7F]/g, "");
+}
+
+// ---------------------------------------------------------------------------
 // textInputDialog — single-line text input with backspace, paste support,
 // and Esc to cancel.
 // ---------------------------------------------------------------------------
@@ -706,7 +716,7 @@ export async function textInputDialog(
           return;
         }
         // Append printable characters (supports paste)
-        const filtered = data.replace(/[\x00-\x1F\x7F]/g, "");
+        const filtered = filterPrintable(data);
         if (filtered.length > 0) {
           buffer += filtered;
           tui.requestRender();

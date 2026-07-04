@@ -29,6 +29,7 @@ fail user-defined shell checks.
   handlers share one `runAsserts` core (filter → `when` → `shell`); each only
   supplies its candidate, env builder, and fail policy (`{value}` fail-fast vs
   `"continue"` collect).
+- **`pi-assert/ui/fuzzy.ts`** — pure fuzzy-match module for the `/asserts` panel search mode: `fuzzyMatch` (case-insensitive subsequence + numeric fuzz score), `matchQuery` (the v1a strip-spaces → v1b AND-of-tokens seam), and `filterSection` (per-section ranker with numeric per-field tiers so field dominance is deterministic). No TUI deps, unit-testable in isolation.
 - **`pi-assert/ui/components.ts`** — shared UI primitives: `renderDetailList`/
   `DetailList` (the selectable list with inline `shell:`/`when:` detail, used
   by both the `/asserts` panel and every install picker), `selectDialog`/
@@ -58,6 +59,13 @@ fail user-defined shell checks.
 - Project `.pi/asserts.json` overrides global `~/.pi/asserts.json` by key name.
 - No special handling for `"false"` — it's just the Unix `false` command
   (always exits 1).
+- **Search swaps `groups`/`nav`, not the renderer.** The `/asserts` panel's
+  fuzzy-search mode filters by pointing `this.groups`/`this.nav` at filtered
+  subsets of the same `Assert` objects (originals saved and restored on `Esc`).
+  `bodyLines`, `renderSection`, and the windowing math run **unchanged** against
+  the filtered model — one shared implementation, no parallel render path.
+  Ranking is per-section (`filterSection`) so section grouping and order stay
+  stable while matches rank inside each section; empty sections drop out.
 - **Outdated detection excludes `default`.** The content signature
   (`entryContentSignature`) compares only repo-driven fields
   (`description`, `hook`, `shell`, `filter`, `when`); `default` is a local

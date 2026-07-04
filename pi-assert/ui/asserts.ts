@@ -3,13 +3,14 @@ import {
   Container,
   matchesKey,
   Key,
+  truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { Assert } from "../engine.js";
 import { fetchRepoEntries, removeRule, setAssertDefault } from "../installer.js";
 import {
   HINT_D_DISABLE_ALL,
-  HINT_ENTER_SPACE_ENABLE,
+  HINT_ENTER_ENABLE,
   HINT_ESC_CANCEL,
   HINT_I_INSTALL_ASSERTS,
   HINT_R_REMOVE,
@@ -18,10 +19,12 @@ import {
   OverlayBox,
   SectionNavigator,
   dialogOverlay,
+  filterPrintable,
   renderAssertDetail,
   renderDetailList,
   renderHintLine,
 } from "./components.js";
+import { filterSection } from "./fuzzy.js";
 import type { AssertsState } from "./state.js";
 import { runInstallWizard } from "./install.js";
 
@@ -60,6 +63,20 @@ export class AssertsPanel {
   nav: SectionNavigator<Assert>;
   private confirm: { name: string; source: string } | null = null;
 
+  // ── Search mode state ─────────────────────────────────────────────
+  // During search `this.groups` / `this.nav` are swapped to filtered
+  // versions (a subset of the originals, same `Assert` object references);
+  // `bodyLines` / `renderSection` / windowing all run unchanged against
+  // the filtered model. `savedGroups` / `savedNav` hold the originals and
+  // are restored on `Esc`. This is the one shared implementation — no
+  // parallel render path (see AGENTS.md).
+  private searchActive = false;
+  private query = "";
+  private savedGroups: Group[] | null = null;
+  private savedNav: SectionNavigator<Assert> | null = null;
+  /** Whether search state is currently exposed (used by tests). */
+  get isSearchActive(): boolean { return this.searchActive; }
+
   /**
    * Composite keys (`${source}\0${name}`) of installed asserts that no longer
    * exist in their source repo (removed upstream).  Keyed by source+name so a
@@ -72,6 +89,93 @@ export class AssertsPanel {
 
   /** Re-render trigger, set by the caller so async fetch resolution can flip badges in. */
   private requestRender: () => void = () => {};
+
+  // ── Search lifecycle ───────────────────────────────────────────────
+  /** Enter fuzzy-search mode. No-op when there's nothing to search. */
+  private enterSearch(): void {
+    if (this.state.broken || this.groups.length === 0) return;
+    this.searchActive = true;
+    this.query = "";
+    this.savedGroups = this.groups;
+    this.savedNav = this.nav;
+    this.applyFilter();
+  }
+
+  /** Exit search; restore focus to the highlighted match in the unfiltered view. */
+  private exitSearch(): void {
+    const kept = this.groups[this.nav.focusedSection]?.asserts[this.nav.focusedIndex];
+    this.groups = this.savedGroups ?? this.groups;
+    this.nav = this.savedNav ?? this.nav;
+    this.savedGroups = null;
+    this.savedNav = null;
+    this.searchActive = false;
+    this.query = "";
+    if (kept) this.restoreFocus(kept);
+  }
+
+  /** Append printable input to the query and re-filter. */
+  private appendQuery(data: string): void {
+    const filtered = filterPrintable(data);
+    if (!filtered) return;
+    this.query += filtered;
+    this.applyFilter();
+  }
+
+  /** Pop the last query char and re-filter (no-op on an empty query). */
+  private popQuery(): void {
+    if (this.query.length === 0) return;
+    this.query = this.query.slice(0, -1);
+    this.applyFilter();
+  }
+
+  /**
+   * Rebuild filtered `groups` / `nav` from `savedGroups` + the current
+   * query, then restore focus to the previously-highlighted assert
+   * (best-effort). Empty/whitespace-only query reproduces every section
+   * unchanged (scores 0). Filtering keeps the same `Assert` references, so
+   * `restoreFocus` can use identity (`indexOf`) lookup.
+   */
+  private applyFilter(): void {
+    const keep = this.groups[this.nav.focusedSection]?.asserts[this.nav.focusedIndex];
+    const filtered = (this.savedGroups ?? this.groups)
+      .map((g) => ({
+        source: g.source,
+        asserts: filterSection(this.query, g.asserts).map((m) => m.assert),
+      }))
+      .filter((g) => g.asserts.length > 0);
+    this.groups = filtered;
+    this.nav = new SectionNavigator(filtered.map((g) => ({ items: g.asserts })));
+    this.restoreFocus(keep);
+  }
+
+  /** Point `nav` at `a`'s section/index in the current (filtered) groups. */
+  private restoreFocus(a: Assert | undefined): void {
+    if (!a) {
+      if (this.groups.length) { this.nav.focus = 0; this.nav.selection[0] = 0; }
+      return;
+    }
+    for (let s = 0; s < this.groups.length; s++) {
+      const idx = this.groups[s]!.asserts.indexOf(a); // identity (===)
+      if (idx >= 0) {
+        this.nav.focus = s;
+        this.nav.selection[s] = idx;
+        return;
+      }
+    }
+    // `a` filtered out: stay in its source section if any filtered group
+    // shares `a.source` (by string — section indices shift as empty
+    // sections drop, so positional lookup is unsafe), else first match.
+    const sec = this.groups.findIndex((g) => g.source === a.source);
+    if (sec >= 0) {
+      this.nav.focus = sec;
+      this.nav.selection[sec] = 0;
+      return;
+    }
+    if (this.groups.length) {
+      this.nav.focus = 0;
+      this.nav.selection[0] = 0;
+    }
+  }
 
   constructor(private state: AssertsState) {
     this.groups = groupBySource(state.asserts);
@@ -150,6 +254,17 @@ export class AssertsPanel {
     terminalHeight: number | undefined,
     hintLen: number,
   ): string[] {
+    // Search filtered to zero matches must take precedence over the normal
+    // empty-panel branch: a zero-match view shows "No matches", never
+    // "No asserts defined!".
+    if (this.searchActive && this.groups.length === 0) {
+      return [
+        ...this.renderHeaderLines(),
+        this.renderSearchQueryLine(width),
+        this.theme.fg("warning", "  No matches"),
+      ];
+    }
+
     if (this.groups.length === 0) {
       return [
         ...this.renderHeaderLines(),
@@ -180,8 +295,9 @@ export class AssertsPanel {
     // directly below the highlighted assert row, so the active section's
     // line budget includes both assert rows and the selected row's details.
     const headerLines = this.renderHeaderLines();
+    const queryLine = this.searchActive ? this.renderSearchQueryLine(width) : null;
     const available =
-      terminalHeight - headerLines.length - 1 - hintLen;
+      terminalHeight - headerLines.length - (queryLine ? 1 : 0) - 1 - hintLen;
     const focusedSection = this.nav.focusedSection;
     const activeGroup = this.groups[focusedSection];
     const activeLen = activeGroup.asserts.length;
@@ -285,11 +401,12 @@ export class AssertsPanel {
       }
     }
 
-    return [...headerLines, ...lines];
+    return [...headerLines, ...(queryLine ? [queryLine] : []), ...lines];
   }
 
   private renderUnboundedBody(width: number): string[] {
     const lines: string[] = [];
+    if (this.searchActive) lines.push(this.renderSearchQueryLine(width));
     for (let i = 0; i < this.groups.length; i++) {
       const g = this.groups[i];
       const isFocused = i === this.nav.focusedSection;
@@ -298,6 +415,13 @@ export class AssertsPanel {
       if (i < this.groups.length - 1) lines.push("");
     }
     return [...this.renderHeaderLines(), ...lines];
+  }
+
+  /** The `/query▏` line shown at the top of the body during search. */
+  private renderSearchQueryLine(width: number): string {
+    const prompt = "/" + this.query;
+    const truncated = truncateToWidth(prompt, Math.max(1, width - 3));
+    return `  ${this.theme.fg("accent", truncated)}▏`;
   }
 
   private renderHeaderLines(): string[] {
@@ -457,8 +581,18 @@ export class AssertsPanel {
       ]);
     }
 
+    if (this.searchActive) {
+      const items: [string, string][] = [
+        ["Esc", "exit search"],
+        ["↑/Down", "move"],
+        HINT_ENTER_ENABLE,
+      ];
+      if (this.groups.length > 1) items.push(HINT_TAB_CYCLE_SECTION);
+      return renderHintLine(this.theme, width, items);
+    }
+
     const items: [string, string][] = [
-      HINT_ENTER_SPACE_ENABLE,
+      HINT_ENTER_ENABLE,
       HINT_T_TOGGLE_DEFAULT,
     ];
     if (this.state.active.size > 0) {
@@ -512,7 +646,24 @@ export class AssertsPanel {
       return undefined;
     }
 
+    // ── Search mode (fzf-style inline filter) ──
+    // Whitelist navigators + Enter + Tab + Esc + Backspace; everything else
+    // (incl. Space and `r`/`t`/`d`/`i`) feeds the query. `r`/`t`/`d`/`i` are
+    // unreachable until `Esc` exits search.
+    if (this.searchActive) {
+      if (matchesKey(data, Key.escape))    { this.exitSearch(); return undefined; }
+      if (matchesKey(data, "backspace"))   { this.popQuery();   return undefined; }
+      if (matchesKey(data, "enter"))      { this.toggleFocused(ctx); return undefined; }
+      if (matchesKey(data, "up"))         { this.moveFocus("up");   return undefined; }
+      if (matchesKey(data, "down"))       { this.moveFocus("down"); return undefined; }
+      if (matchesKey(data, Key.tab))       { this.nav.cycleSection("next"); return undefined; }
+      if (matchesKey(data, Key.shift("tab"))) { this.nav.cycleSection("prev"); return undefined; }
+      this.appendQuery(data); // filterPrintable inside; no-op for bare controls
+      return undefined;
+    }
+
     // ── Global hotkeys ──
+    if (matchesKey(data, "/")) { this.enterSearch(); return undefined; }
     if (matchesKey(data, "i")) return "install";
     if (matchesKey(data, Key.escape)) return "cancel";
 
@@ -573,18 +724,10 @@ export class AssertsPanel {
       return undefined;
     }
 
-    // ── Enter / Space: toggle ──
-    if (matchesKey(data, "enter") || matchesKey(data, "space")) {
-      const selected = focused.asserts[this.nav.focusedIndex];
-      if (selected) {
-        if (this.state.active.has(selected.name)) {
-          this.state.disable(selected.name);
-        } else {
-          this.state.enable(selected.name);
-        }
-        this.state.persist();
-        this.state.updateStatus(ctx);
-      }
+    // ── Enter: toggle (Space is no longer a binding — it's a query char in
+    // search mode and resolves to a no-op in normal mode). ──
+    if (matchesKey(data, "enter")) {
+      this.toggleFocused(ctx);
       return undefined;
     }
 
@@ -603,18 +746,28 @@ export class AssertsPanel {
     }
 
     // ── Arrows: cross-section first, then within ──
-    if (matchesKey(data, "up")) {
-      if (this.nav.cross("up")) return undefined;
-      this.nav.moveWithin("up");
-      return undefined;
-    }
-    if (matchesKey(data, "down")) {
-      if (this.nav.cross("down")) return undefined;
-      this.nav.moveWithin("down");
-      return undefined;
-    }
+    if (matchesKey(data, "up"))    { this.moveFocus("up");   return undefined; }
+    if (matchesKey(data, "down"))  { this.moveFocus("down"); return undefined; }
 
     return undefined;
+  }
+
+  // ── Shared input helpers (used by both modes) ───────────────────────
+  /** Move focus one step, crossing to the adjacent section at the boundary. */
+  private moveFocus(dir: "up" | "down"): void {
+    if (this.nav.cross(dir)) return;
+    this.nav.moveWithin(dir);
+  }
+
+  /** Toggle the active state of the currently focused assert. */
+  private toggleFocused(ctx: ExtensionContext): void {
+    const focused = this.groups[this.nav.focusedSection];
+    const selected = focused?.asserts[this.nav.focusedIndex];
+    if (!selected) return;
+    if (this.state.active.has(selected.name)) this.state.disable(selected.name);
+    else this.state.enable(selected.name);
+    this.state.persist();
+    this.state.updateStatus(ctx);
   }
 }
 

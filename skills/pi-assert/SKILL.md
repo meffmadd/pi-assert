@@ -353,8 +353,9 @@ In the `/asserts` panel, press `t` on the focused assert to flip its
 whichever owns the entry). Defaults-marked asserts are tagged with
 `(default)` in the panel. Note: toggling `default` only affects
 **future** sessions with no saved session config; the current
-session's active set is unchanged — press `Enter`/`Space` to
-enable/disable the assert right now.
+session's active set is unchanged — press `Enter` to
+enable/disable the assert right now (`Space` is no longer a toggle; it's a
+query character in fuzzy-search mode).
 
 ## Disabling all / removing asserts
 
@@ -371,3 +372,23 @@ alphabetically). Press `Tab` / `Shift+Tab` to cycle focus between sections
 with wraparound (last wraps to first). It's a discrete jump that preserves
 each section's remembered row — Tab away and Shift+Tab back lands you on
 the same assert. The hint only appears when more than one section exists.
+
+## Fuzzy search
+
+In the `/asserts` panel, press `/` to enter fuzzy-search mode and narrow the
+list by typing. Matching is fuzzy subsequence, ranked best-first **within each
+section** — sections are preserved, non-matching rows hide within their
+section, and empty sections disappear entirely. Spaces in the query are
+ignored for matching, so `no env` still matches `no-env`.
+
+While search is active: `↑`/`Down` move through the filtered matches
+(crossing to the next non-empty section at the boundaries), `Enter` toggles
+the focused match, and `Tab`/`Shift+Tab` cycle between the non-empty
+filtered sections. `Esc` exits search and lands focus back on the highlighted
+match in the unfiltered view. Every printable character (including **Space**)
+feeds the query, so `r`/`t`/`d`/`i` are suspended as actions during search —
+press `Esc` first to use them. `/` is a no-op on an empty/broken panel.
+
+Note: `Enter` (not `Enter`/`Space`) is the enable/disable key in both normal
+and search mode; Space is a query character in search mode and a no-op
+otherwise.

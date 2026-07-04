@@ -995,3 +995,246 @@ describe("AssertsPanel orphaned detection", () => {
     );
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════
+// Fuzzy search mode (/ to search, Esc to exit)
+// ═══════════════════════════════════════════════════════════════════
+
+describe("AssertsPanel fuzzy search", () => {
+  // The mock theme wraps accent text in [], so the query line renders as
+  // "  [/query▏]" (accent) and a block cursor ▏.
+  const queryLine = (lines: string[]) =>
+    lines.find((l) => l.includes("▏") && l.includes("/"));
+
+  it("`/` enters search mode and renders the query line", () => {
+    const panel = makePanel([makeAssert("alpha"), makeAssert("beta")]);
+    panel.handleInput("/", makeCtx());
+
+    assert.ok(panel.isSearchActive, "search is active after /");
+    const lines = panel.render(80);
+    assert.ok(queryLine(lines), "renders the /query▏ line");
+  });
+
+  it("typing filters within sections and hides empty sections", () => {
+    const panel = makePanel([
+      makeAssert("write-guard"),
+      makeAssert("no-env"),
+      makeAssert("read-only", "repo/aaa"),
+    ]);
+    panel.handleInput("/", makeCtx());
+    panel.handleInput("e", makeCtx());
+    panel.handleInput("n", makeCtx());
+    panel.handleInput("v", makeCtx());
+
+    const lines = panel.render(80);
+    assert.ok(lines.some((l) => l.includes("no-env")),
+      "no-env matches 'env'");
+    assert.ok(!lines.some((l) => l.includes("write-guard")),
+      "write-guard is filtered out");
+    assert.ok(!lines.some((l) => l.includes("repo/aaa")),
+      "empty section (read-only didn't match) is hidden entirely");
+  });
+
+  it("Down moves within the filtered section and crosses to the next non-empty", () => {
+    const panel = makePanel([
+      makeAssert("alpha-env"),
+      makeAssert("beta-env"),
+      makeAssert("gamma-thing", "repo/aaa"),
+    ]);
+    panel.handleInput("/", makeCtx());
+    panel.handleInput("e", makeCtx());
+    panel.handleInput("n", makeCtx());
+    panel.handleInput("v", makeCtx());
+    // Local: alpha-env, beta-env; repo/aaa: gamma-thing also matches 'env'?
+    // gamma-thing has no 'e','n','v' subsequence → excluded. So only local.
+
+    // Start at alpha-env (row 0). Down → beta-env.
+    panel.handleInput("\x1b[B", makeCtx()); // down
+    assert.equal(panel.nav.focusedIndex, 1, "moved within the filtered local section");
+  });
+
+  it("Enter toggles the focused match", () => {
+    const active = new Set<string>();
+    const state = {
+      asserts: [makeAssert("no-env"), makeAssert("write-guard")],
+      active,
+      enable(n: string) { active.add(n); },
+      disable(n: string) { active.delete(n); },
+      persist() {},
+      updateStatus() {},
+    } as unknown as AssertsState;
+    const panel = new AssertsPanel(state);
+    panel.setTheme(mockTheme());
+
+    panel.handleInput("/", makeCtx());
+    panel.handleInput("e", makeCtx());
+    panel.handleInput("n", makeCtx());
+    panel.handleInput("v", makeCtx());
+    panel.handleInput("\r", makeCtx()); // Enter toggles no-env
+
+    assert.ok(active.has("no-env"), "Enter toggles the focused match on");
+  });
+
+  it("Space appends to the query (and ignores it for matching in v1a)", () => {
+    const panel = makePanel([makeAssert("no-env"), makeAssert("write-guard")]);
+    panel.handleInput("/", makeCtx());
+    panel.handleInput("n", makeCtx());
+    panel.handleInput("o", makeCtx());
+    panel.handleInput(" ", makeCtx());   // space → query char
+    panel.handleInput("e", makeCtx());
+    panel.handleInput("n", makeCtx());
+    panel.handleInput("v", makeCtx());
+
+    // query is "no env" → strip → "noenv" which is a subsequence of "no-env".
+    assert.ok(panel.isSearchActive, "still in search (Space didn't toggle)");
+    const lines = panel.render(80);
+    assert.ok(lines.some((l) => l.includes("no-env")),
+      "'no env' matches 'no-env' (spaces ignored for matching)");
+    // query line should show the literal spaces.
+    const q = queryLine(lines);
+    assert.ok(q && q.includes("no env"), "query line displays the space");
+  });
+
+  it("Tab cycles between non-empty filtered sections", () => {
+    const panel = makePanel([
+      makeAssert("local-env"),
+      makeAssert("repo-env", "repo/aaa"),
+    ]);
+    panel.handleInput("/", makeCtx());
+    for (const ch of "env") panel.handleInput(ch, makeCtx());
+
+    assert.equal(panel.nav.focusedSection, 0, "starts on local");
+    panel.handleInput("\t", makeCtx());
+    assert.equal(panel.nav.focusedSection, 1, "Tab cycles to repo/aaa");
+  });
+
+  it("Esc exits search WITHOUT closing the panel (returns undefined)", () => {
+    const panel = makePanel([makeAssert("no-env"), makeAssert("write-guard")]);
+    panel.handleInput("/", makeCtx());
+    panel.handleInput("e", makeCtx());
+    const result = panel.handleInput("\x1b", makeCtx()); // Esc
+    assert.equal(result, undefined, "Esc during search does NOT cancel the panel");
+    assert.ok(!panel.isSearchActive, "search mode is exited");
+  });
+
+  it("Esc restores focus to the highlighted match in the unfiltered view", () => {
+    const panel = makePanel([
+      makeAssert("alpha"),
+      makeAssert("no-env"),
+      makeAssert("write-guard", "repo/aaa"),
+    ]);
+    panel.handleInput("/", makeCtx());
+    panel.handleInput("e", makeCtx());
+    panel.handleInput("n", makeCtx());
+    panel.handleInput("v", makeCtx());
+    // Only "no-env" matches; it's the sole row in the filtered local section.
+    assert.equal(panel.nav.focusedSection, 0);
+    assert.equal(panel.nav.focusedIndex, 0);
+
+    panel.handleInput("\x1b", makeCtx()); // Esc → exit
+    assert.ok(!panel.isSearchActive);
+    assert.equal(panel.nav.focusedSection, 0, "back on the local section");
+    assert.equal(panel.nav.focusedIndex, 1, "focus restored to no-env's row in the unfiltered view");
+  });
+
+  it("empty results render 'No matches' (not 'No asserts defined!')", () => {
+    const panel = makePanel([makeAssert("alpha"), makeAssert("beta")]);
+    panel.handleInput("/", makeCtx());
+    panel.handleInput("z", makeCtx());
+    panel.handleInput("z", makeCtx());
+    panel.handleInput("z", makeCtx());
+
+    const lines = panel.render(80);
+    assert.ok(lines.some((l) => l.includes("No matches")),
+      "zero-match query shows 'No matches'");
+    assert.ok(!lines.some((l) => l.includes("No asserts defined")),
+      "never shows the empty-panel copy during search");
+  });
+
+  it("Backspace restores the list after widening back from no matches", () => {
+    const panel = makePanel([makeAssert("alpha")]);
+    panel.handleInput("/", makeCtx());
+    panel.handleInput("z", makeCtx());
+    assert.ok(panel.render(80).some((l) => l.includes("No matches")));
+    panel.handleInput("\x7f", makeCtx()); // backspace → query ""
+    const lines = panel.render(80);
+    assert.ok(lines.some((l) => l.includes("alpha")),
+      "back to empty query shows the list again");
+  });
+
+  it("focus is preserved when the focused assert still matches", () => {
+    const panel = makePanel([makeAssert("write-guard"), makeAssert("no-env")]);
+    panel.handleInput("/", makeCtx());
+    // Move to no-env first.
+    panel.handleInput("\x1b[B", makeCtx()); // down → no-env
+    assert.equal(panel.nav.focusedItem?.name, "no-env");
+    // Type 'e' — both still match (filtering may reorder within the section,
+    // but focus must stay on no-env, not yank to write-guard).
+    panel.handleInput("e", makeCtx());
+    assert.equal(panel.nav.focusedItem?.name, "no-env",
+      "focus stays on no-env, not reset to write-guard");
+  });
+
+  it("focus drops out to the same section's first match when the focused assert is filtered out", () => {
+    const panel = makePanel([makeAssert("write-guard"), makeAssert("no-env")]);
+    panel.handleInput("/", makeCtx());
+    panel.handleInput("\x1b[B", makeCtx()); // down → no-env (index 1)
+    assert.equal(panel.nav.focusedIndex, 1);
+    // Type 'w' → only write-guard matches; no-env drops out.
+    panel.handleInput("w", makeCtx());
+    assert.equal(panel.nav.focusedSection, 0,
+      "still in the local section (same source)");
+    assert.equal(panel.nav.focusedIndex, 0,
+      "focus fell back to the first remaining match, not section 0 index 1");
+    const lines = panel.render(80);
+    assert.ok(lines.some((l) => l.includes("write-guard")));
+    assert.ok(!lines.some((l) => l.includes("no-env")));
+  });
+
+  it("`/` is a no-op in confirm mode", () => {
+    const panel = makePanel([makeAssert("alpha", "repo/owner")]);
+    panel.handleInput("r", makeCtx()); // open remove confirm
+    panel.handleInput("/", makeCtx());
+    assert.ok(!panel.isSearchActive, "search not entered during confirm");
+    assert.ok(panel.render(80).some((l) => l.includes(`Remove "alpha"?`)),
+      "confirm dialog still open");
+  });
+
+  it("`/` is a no-op on an empty panel", () => {
+    const panel = makePanel([]);
+    panel.handleInput("/", makeCtx());
+    assert.ok(!panel.isSearchActive, "no search on an empty panel");
+  });
+
+  it("normal mode: Space no longer toggles (no-op); Enter toggles", () => {
+    const active = new Set<string>();
+    const state = {
+      asserts: [makeAssert("alpha")],
+      active,
+      enable(n: string) { active.add(n); },
+      disable(n: string) { active.delete(n); },
+      persist() {},
+      updateStatus() {},
+    } as unknown as AssertsState;
+    const panel = new AssertsPanel(state);
+    panel.setTheme(mockTheme());
+
+    panel.handleInput(" ", makeCtx()); // Space — should NOT toggle
+    assert.equal(active.size, 0, "Space does not toggle in normal mode");
+
+    panel.handleInput("\r", makeCtx()); // Enter — toggles on
+    assert.ok(active.has("alpha"), "Enter toggles in normal mode");
+  });
+
+  it("shows the search hint while search is active", () => {
+    const panel = makePanel([makeAssert("alpha"), makeAssert("beta", "repo/aaa")]);
+    panel.handleInput("/", makeCtx());
+    const hint = panel.render(80).find((l) => l.includes("exit search"));
+    assert.ok(hint, "search hint mentions 'exit search'");
+    // r/t/d/i are suspended during search — their hints must not appear.
+    const hintLines = panel.render(80).filter((l) => l.includes("exit search"));
+    assert.ok(!hintLines.some((l) => /Remove|Install|Toggle default|Disable all/.test(l)),
+      "r/t/d/i hints are omitted during search");
+  });
+});
+
