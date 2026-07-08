@@ -13,6 +13,7 @@ import {
   type SelectItem,
   type SizeValue,
 } from "@earendil-works/pi-tui";
+import { highlightSegments } from "./fuzzy.js";
 
 // ---------------------------------------------------------------------------
 // Shared text helpers
@@ -31,41 +32,45 @@ export function renderAssertDetail(
   theme: Theme,
   width: number,
   entry: { shell: string; when?: string },
+  /**
+   * When set (search mode), matched subsequence chars in `shell`/`when` are
+   * highlighted via `highlightSegments`; otherwise the values render muted.
+   * The install wizard never passes this.
+   */
+  query?: string,
 ): string[] {
   const dim = (s: string) => theme.fg("dim", s);
   const muted = (s: string) => theme.fg("muted", s);
+  const highlight = (s: string) => theme.fg("accent", theme.underline(s));
 
   const indent = 4;
-  const shellLabel = "shell: ";
-  const whenLabel = "when: ";
 
   const lines: string[] = [];
 
-  const shellWidth = Math.max(1, width - indent - shellLabel.length);
-  const shellLines = wrapTextWithAnsi(entry.shell, shellWidth);
-  for (let i = 0; i < shellLines.length; i++) {
-    if (i === 0) {
-      lines.push(" ".repeat(indent) + dim(shellLabel) + muted(shellLines[i]!));
-    } else {
-      lines.push(
-        " ".repeat(indent + shellLabel.length) + muted(shellLines[i]!),
-      );
-    }
-  }
-
-  if (entry.when) {
-    const whenWidth = Math.max(1, width - indent - whenLabel.length);
-    const whenLines = wrapTextWithAnsi(entry.when, whenWidth);
-    for (let i = 0; i < whenLines.length; i++) {
+  // One helper for both `shell` and `when` so the label/wrap/highlight
+  // logic lives in a single place.  The value is styled once — segment-
+  // highlighted on a match, otherwise muted in full — then wrapped.
+  // `wrapTextWithAnsi` is ANSI-aware: it wraps by visible width and
+  // re-applies active codes on each continuation line, so highlights (and
+  // the muted base) carry across line breaks.
+  const detailLines = (value: string, label: string): void => {
+    const contentWidth = Math.max(1, width - indent - label.length);
+    const segs = query ? highlightSegments(query, value) : null;
+    const styled = segs
+      ? segs.map((s) => (s.matched ? highlight(s.text) : muted(s.text))).join("")
+      : muted(value);
+    const wrapped = wrapTextWithAnsi(styled, contentWidth);
+    for (let i = 0; i < wrapped.length; i++) {
       if (i === 0) {
-        lines.push(" ".repeat(indent) + dim(whenLabel) + muted(whenLines[i]!));
+        lines.push(" ".repeat(indent) + dim(label) + wrapped[i]!);
       } else {
-        lines.push(
-          " ".repeat(indent + whenLabel.length) + muted(whenLines[i]!),
-        );
+        lines.push(" ".repeat(indent + label.length) + wrapped[i]!);
       }
     }
-  }
+  };
+
+  detailLines(entry.shell, "shell: ");
+  if (entry.when) detailLines(entry.when, "when: ");
 
   return lines;
 }
@@ -536,6 +541,11 @@ export interface DetailListOptions<T> {
    * warning for orphaned asserts).  Returns `[]` for no prefix.
    */
   detailPrefix?: (item: T) => string[];
+  /**
+   * When set, the shell/when detail block highlights query matches (search
+   * mode).  Omitted by the install wizard, which has no search.
+   */
+  highlightQuery?: string;
 }
 
 export function renderDetailList<T>(
@@ -572,7 +582,7 @@ export function renderDetailList<T>(
       const prefixLines = opts.detailPrefix?.(item) ?? [];
       for (const l of prefixLines) lines.push(l);
       const entry = detailFor(item);
-      if (entry) lines.push(...renderAssertDetail(theme, width, entry));
+      if (entry) lines.push(...renderAssertDetail(theme, width, entry, opts.highlightQuery));
     }
   }
 

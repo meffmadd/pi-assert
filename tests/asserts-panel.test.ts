@@ -19,6 +19,7 @@ function mockTheme(): Theme {
     fg: (role: string, text: string) =>
       role === "accent" ? `[${text}]` : text,
     bold: (text: string) => text,
+    underline: (text: string) => text,
   } as unknown as Theme;
 }
 
@@ -64,6 +65,11 @@ function makeCtx(): ExtensionContext {
 /** Extract the currently highlighted assert row. */
 function focusedLine(lines: string[]): string | undefined {
   return lines.find((line) => line.startsWith("[> "));
+}
+
+/** Strip the mock theme's `[]` accent wrappers so substring checks survive per-char highlighting. */
+function plain(s: string): string {
+  return s.replace(/[\[\]]/g, "");
 }
 
 // ── Tests ─────────────────────────────────────────────────────────
@@ -1027,7 +1033,7 @@ describe("AssertsPanel fuzzy search", () => {
     panel.handleInput("v", makeCtx());
 
     const lines = panel.render(80);
-    assert.ok(lines.some((l) => l.includes("no-env")),
+    assert.ok(lines.some((l) => plain(l).includes("no-env")),
       "no-env matches 'env'");
     assert.ok(!lines.some((l) => l.includes("write-guard")),
       "write-guard is filtered out");
@@ -1088,7 +1094,7 @@ describe("AssertsPanel fuzzy search", () => {
     // query is "no env" → strip → "noenv" which is a subsequence of "no-env".
     assert.ok(panel.isSearchActive, "still in search (Space didn't toggle)");
     const lines = panel.render(80);
-    assert.ok(lines.some((l) => l.includes("no-env")),
+    assert.ok(lines.some((l) => plain(l).includes("no-env")),
       "'no env' matches 'no-env' (spaces ignored for matching)");
     // query line should show the literal spaces.
     const q = queryLine(lines);
@@ -1187,7 +1193,7 @@ describe("AssertsPanel fuzzy search", () => {
     assert.equal(panel.nav.focusedIndex, 0,
       "focus fell back to the first remaining match, not section 0 index 1");
     const lines = panel.render(80);
-    assert.ok(lines.some((l) => l.includes("write-guard")));
+    assert.ok(lines.some((l) => plain(l).includes("write-guard")));
     assert.ok(!lines.some((l) => l.includes("no-env")));
   });
 
@@ -1235,6 +1241,92 @@ describe("AssertsPanel fuzzy search", () => {
     const hintLines = panel.render(80).filter((l) => l.includes("exit search"));
     assert.ok(!hintLines.some((l) => /Remove|Install|Toggle default|Disable all/.test(l)),
       "r/t/d/i hints are omitted during search");
+  });
+
+  // ── Highlight rendering ─────────────────────────────────────────
+  // The mock theme wraps accent text in `[]`, so a highlighted name splits
+  // into per-char-run accent spans. These tests pin that the highlight is
+  // actually emitted (not just that filtering happened).
+
+  it("highlights matched chars in the focused row's name", () => {
+    const panel = makePanel([makeAssert("no-env"), makeAssert("write-guard")]);
+    panel.handleInput("/", makeCtx());
+    for (const ch of "env") panel.handleInput(ch, makeCtx());
+
+    const lines = panel.render(80);
+    // "no-env" is the sole match → focused (selected). The matched 'env'
+    // run is its own accent span `[env]`, separate from the unmatched `no-`
+    // prefix span — proving per-segment highlighting, not a whole-label wrap.
+    const row = lines.find((l) => l.includes("no-env") || (l.includes("no-") && l.includes("env")));
+    assert.ok(row, "no-env row renders");
+    assert.ok(plain(row!).includes("no-env"), "name is intact after stripping accent");
+    assert.ok(row!.includes("[env]"), "matched run is its own accent span");
+  });
+
+  it("highlights matched chars in the focused row's shell detail", () => {
+    const panel = makePanel([
+      makeAssert("alpha", "local", false, { shell: "run env-check" }),
+    ]);
+    panel.handleInput("/", makeCtx());
+    for (const ch of "env") panel.handleInput(ch, makeCtx());
+
+    const lines = panel.render(80);
+    const shellLine = lines.find((l) => l.includes("shell:"));
+    assert.ok(shellLine, "shell detail renders");
+    // Matched 'env' run is accent-highlighted (mock wraps accent in []);
+    // unmatched chars are muted (mock returns them plain). 'run env-check'
+    // has no 'e' before the 'env' token, so the greedy matcher hits it
+    // contiguously.
+    assert.ok(shellLine!.includes("[env]"),
+      "matched chars in the shell command are highlighted");
+  });
+
+  // ── Highlight attribute: underline, not bold ────────────────────
+  // Bold is too subtle to read against the accent-coloured selected row;
+  // underline is hue-independent and fzf's default for current-line matches.
+  // These tests use a tag-style theme so the attribute choice is observable.
+
+  it("underlines (not bolds) matched chars on the focused row's name", () => {
+    const theme = {
+      fg: (_role: string, text: string) => text,
+      bold: (text: string) => `<b>${text}</b>`,
+      underline: (text: string) => `<u>${text}</u>`,
+    } as unknown as Theme;
+    const state = {
+      asserts: [makeAssert("no-env"), makeAssert("write-guard")],
+      active: new Set<string>(),
+    } as unknown as AssertsState;
+    const panel = new AssertsPanel(state);
+    panel.setTheme(theme);
+
+    panel.handleInput("/", makeCtx());
+    for (const ch of "env") panel.handleInput(ch, makeCtx());
+
+    const row = panel.render(80).find((l) => l.includes("no-") && l.includes("env"))!;
+    assert.ok(row.includes("<u>env</u>"),
+      "matched chars on the focused row are underlined");
+    assert.ok(!row.includes("<b>"),
+      "matched chars are not bolded (bold is unreadable against accent)");
+  });
+
+  it("underlines matched chars in the focused row's shell detail", () => {
+    const theme = {
+      fg: (_role: string, text: string) => text,
+      bold: (text: string) => `<b>${text}</b>`,
+      underline: (text: string) => `<u>${text}</u>`,
+    } as unknown as Theme;
+    const state = {
+      asserts: [makeAssert("alpha", "local", false, { shell: "run env-check" })],
+      active: new Set<string>(),
+    } as unknown as AssertsState;
+    const panel = new AssertsPanel(state);
+    panel.setTheme(theme);
+    panel.handleInput("/", makeCtx());
+    for (const ch of "env") panel.handleInput(ch, makeCtx());
+
+    const shellLine = panel.render(80).find((l) => l.includes("shell:"))!;
+    assert.ok(shellLine.includes("<u>env</u>"),
+      "matched chars in the shell detail are underlined on the focused row");
   });
 });
 

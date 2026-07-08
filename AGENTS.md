@@ -29,7 +29,7 @@ fail user-defined shell checks.
   handlers share one `runAsserts` core (filter → `when` → `shell`); each only
   supplies its candidate, env builder, and fail policy (`{value}` fail-fast vs
   `"continue"` collect).
-- **`pi-assert/ui/fuzzy.ts`** — pure fuzzy-match module for the `/asserts` panel search mode: `fuzzyMatch` (case-insensitive subsequence + numeric fuzz score), `matchQuery` (the v1a strip-spaces → v1b AND-of-tokens seam), and `filterSection` (per-section ranker with numeric per-field tiers so field dominance is deterministic). No TUI deps, unit-testable in isolation.
+- **`pi-assert/ui/fuzzy.ts`** — pure fuzzy-match module for the `/asserts` panel search mode: `fuzzyMatch` (case-insensitive subsequence + numeric fuzz score), `matchQuery` (the v1a strip-spaces → v1b AND-of-tokens seam), `filterSection` (per-section ranker with numeric per-field tiers so field dominance is deterministic), and `highlightSegments` (splits a target into matched/unmatched runs for render-time highlighting, reusing `matchQuery` so highlights stay consistent with what ranked the row). No TUI deps, unit-testable in isolation.
 - **`pi-assert/ui/components.ts`** — shared UI primitives: `renderDetailList`/
   `DetailList` (the selectable list with inline `shell:`/`when:` detail, used
   by both the `/asserts` panel and every install picker), `selectDialog`/
@@ -83,3 +83,15 @@ fail user-defined shell checks.
   respectively) that every caller builds on. When adding a new view or hook,
   extend the shared core instead of copying the logic — two copies will
   silently drift.
+- **Highlighting is a render concern, not a filter concern.** Search match
+  highlighting recomputes `highlightSegments(query, field)` per visible field
+  at render time rather than threading `FuzzyResult.positions` through the
+  panel. The matching algorithm stays single-sourced in `matchQuery` (both
+  `filterSection` and `highlightSegments` call it — reuse, not duplication);
+  the redundant calls are microseconds and avoid a `FuzzyResult`/`SectionMatch`
+  shape change, new panel-side positions state, and a second helper. The name
+  highlights via the panel's `renderLabel` (one method shared by the active
+  and inactive row paths); `shell`/`when` highlight in `renderAssertDetail`,
+  pre-styled before the ANSI-aware `wrapTextWithAnsi` so highlights carry
+  across wrapped lines. A `score === 0` dead path returns no segments, so a
+  field lights up iff it contributed to ranking.

@@ -24,7 +24,7 @@ import {
   renderDetailList,
   renderHintLine,
 } from "./components.js";
-import { filterSection } from "./fuzzy.js";
+import { filterSection, highlightSegments } from "./fuzzy.js";
 import type { AssertsState } from "./state.js";
 import { runInstallWizard } from "./install.js";
 
@@ -436,6 +436,39 @@ export class AssertsPanel {
   }
 
   // ── Render helpers ─────────────────────────────────────────────────
+  /** The plain row label: `name` plus the optional ` (default)` tag. */
+  private plainLabel(a: Assert): string {
+    return a.default ? `${a.name} (default)` : a.name;
+  }
+
+  /**
+   * Render the name (+ optional " (default)" suffix) with query matches
+   * highlighted, then `padding` aligned to the label column.
+   *
+   * `base` styles unmatched text (and the suffix + padding); `highlight`
+   * styles matched chars.  When search is inactive or the name doesn't
+   * match, the whole name+suffix+padding is styled via `base` as a single
+   * run — byte-identical to the pre-highlight render (so the empty-padding
+   * and column-alignment cases are unchanged).  ANSI codes are zero visible
+   * width, so highlighting never disturbs the padding math.
+   */
+  private renderLabel(
+    a: Assert,
+    base: (s: string) => string,
+    highlight: (s: string) => string,
+    padding: string,
+  ): string {
+    const segs =
+      this.searchActive ? highlightSegments(this.query, a.name) : null;
+    if (!segs) return base(this.plainLabel(a) + padding);
+    const suffix = a.default ? " (default)" : "";
+    return (
+      segs
+        .map((s) => (s.matched ? highlight(s.text) : base(s.text)))
+        .join("") + base(suffix + padding)
+    );
+  }
+
   private renderSectionHeader(group: Group, focused: boolean): string {
     const header = group.source === "local" ? "Local" : group.source;
     const color = focused ? "accent" : "muted";
@@ -458,24 +491,24 @@ export class AssertsPanel {
         orphaned.has(`${a.source}\0${a.name}`);
       const maxLabelWidth = Math.max(
         ...group.asserts.map(
-          (a) =>
-            (a.default ? `${a.name} (default)` : a.name).length +
-            (isOrphaned(a) ? orphanW : 0),
+          (a) => this.plainLabel(a).length + (isOrphaned(a) ? orphanW : 0),
         ),
       );
       const lines: string[] = [];
+      const muted = (s: string) => this.theme.fg("muted", s);
+      const accent = (s: string) => this.theme.fg("accent", s);
       for (const a of group.asserts) {
         const badge = isOrphaned(a)
           ? this.theme.fg("warning", "⚠ ")
           : "";
-        const label = a.default ? `${a.name} (default)` : a.name;
-        const labelW = label.length + (isOrphaned(a) ? orphanW : 0);
+        const labelW =
+          this.plainLabel(a).length + (isOrphaned(a) ? orphanW : 0);
         const padding = " ".repeat(Math.max(0, maxLabelWidth - labelW));
         const status = this.state.active.has(a.name)
           ? this.theme.fg("muted", "enabled")
           : this.theme.fg("dim", "disabled");
         lines.push(
-          `   ${badge}${this.theme.fg("muted", label + padding)}  ${status}`,
+          `   ${badge}${this.renderLabel(a, muted, accent, padding)}  ${status}`,
         );
       }
       return lines;
@@ -500,9 +533,7 @@ export class AssertsPanel {
     const orphanW = visibleWidth(theme.fg("warning", "⚠ "));
     const maxLabelWidth = Math.max(
       ...group.asserts.map(
-        (a) =>
-          (a.default ? `${a.name} (default)` : a.name).length +
-          (isOrphaned(a) ? orphanW : 0),
+        (a) => this.plainLabel(a).length + (isOrphaned(a) ? orphanW : 0),
       ),
     );
 
@@ -511,16 +542,20 @@ export class AssertsPanel {
       selectedIndex,
       window: [start, end],
       showScrollIndicator: false,
+      highlightQuery: this.searchActive ? this.query : undefined,
       renderRow: (a, selected) => {
         const badge = orphanBadge(a);
-        const label = a.default ? `${a.name} (default)` : a.name;
         const status = active.has(a.name) ? "enabled" : "disabled";
         const labelW =
-          label.length + (isOrphaned(a) ? orphanW : 0);
+          this.plainLabel(a).length + (isOrphaned(a) ? orphanW : 0);
         const padding = " ".repeat(Math.max(0, maxLabelWidth - labelW));
-        const labelText = selected
-          ? theme.fg("accent", label + padding)
-          : label + padding;
+        const base = selected
+          ? (s: string) => theme.fg("accent", s)
+          : (s: string) => s;
+        const highlight = selected
+          ? (s: string) => theme.fg("accent", theme.underline(s))
+          : (s: string) => theme.fg("accent", s);
+        const labelText = this.renderLabel(a, base, highlight, padding);
         const valueText = selected
           ? theme.fg("accent", status)
           : theme.fg("dim", status);

@@ -379,7 +379,9 @@ In the `/asserts` panel, press `/` to enter fuzzy-search mode and narrow the
 list by typing. Matching is fuzzy subsequence, ranked best-first **within each
 section** — sections are preserved, non-matching rows hide within their
 section, and empty sections disappear entirely. Spaces in the query are
-ignored for matching, so `no env` still matches `no-env`.
+ignored for matching, so `no env` still matches `no-env`. Matched
+characters are highlighted inline — in the name within each row, and in
+the `shell`/`when` detail block under the focused row.
 
 While search is active: `↑`/`Down` move through the filtered matches
 (crossing to the next non-empty section at the boundaries), `Enter` toggles

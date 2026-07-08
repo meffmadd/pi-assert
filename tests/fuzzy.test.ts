@@ -13,6 +13,7 @@ import {
   fuzzyMatch,
   matchQuery,
   filterSection,
+  highlightSegments,
 } from "../pi-assert/ui/fuzzy.js";
 import type { Assert } from "../pi-assert/engine.js";
 
@@ -133,6 +134,67 @@ describe("matchQuery", () => {
     assert.ok(matchQuery(" ", "x"), "a single space strips to empty → matches");
     assert.ok(matchQuery("   ", "anything"),
       "all-spaces query strips to empty → matches");
+  });
+});
+
+// ── highlightSegments ──────────────────────────────────────────
+
+describe("highlightSegments", () => {
+  it("returns null for an empty query", () => {
+    assert.equal(highlightSegments("", "no-env"), null);
+  });
+
+  it("returns null when the query is not a subsequence", () => {
+    assert.equal(highlightSegments("xyz", "no-env"), null);
+  });
+
+  it("returns null for a 0-clamp dead-path match (consistent with filterSection)", () => {
+    // Same dead-path case as fuzzyMatch: gaps so wide the score clamps to 0,
+    // which filterSection treats as a non-match — so it must not highlight.
+    const dead = "g" + "x".repeat(120) + "i" + "x".repeat(120) + "t";
+    assert.equal(highlightSegments("git", dead), null);
+  });
+
+  it("splits a contiguous match into matched/unmatched runs", () => {
+    const segs = highlightSegments("env", "no-env")!;
+    assert.deepEqual(segs, [
+      { text: "no-", matched: false },
+      { text: "env", matched: true },
+    ]);
+  });
+
+  it("matches a whole target as a single matched run", () => {
+    assert.deepEqual(highlightSegments("env", "env"), [
+      { text: "env", matched: true },
+    ]);
+  });
+
+  it("reconstructs the target and marks exactly the matched indices", () => {
+    // 'wrg' in 'write-guard' → w(0), r(1), g(6): scattered, so matched runs
+    // are interleaved with unmatched gaps.
+    const segs = highlightSegments("wrg", "write-guard")!;
+    assert.equal(segs.map((s) => s.text).join(""), "write-guard");
+    const matchedIdx: number[] = [];
+    let i = 0;
+    for (const s of segs) {
+      for (let j = 0; j < s.text.length; j++) {
+        if (s.matched) matchedIdx.push(i);
+        i++;
+      }
+    }
+    assert.deepEqual(matchedIdx, [0, 1, 6]);
+  });
+
+  it("ignores spaces in the query (v1a strip)", () => {
+    // 'no env' strips to 'noenv' → matches 'no-env' (skipping the '-').
+    const segs = highlightSegments("no env", "no-env")!;
+    assert.ok(segs, "space-stripped query still matches");
+    assert.equal(segs.map((s) => s.text).join(""), "no-env");
+  });
+
+  it("is case-insensitive", () => {
+    const segs = highlightSegments("ENV", "no-env")!;
+    assert.ok(segs.some((s) => s.matched && s.text.toLowerCase() === "env"));
   });
 });
 

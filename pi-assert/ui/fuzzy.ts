@@ -14,7 +14,7 @@ import type { Assert } from "../engine.js";
 export interface FuzzyResult {
   /** Higher is better. Includes the per-field tier in `filterSection`. */
   score: number;
-  /** Matched indices in the target (for future highlighting; unused in v1). */
+  /** Matched indices in the target (consumed by `highlightSegments`). */
   positions: number[];
 }
 
@@ -146,6 +146,49 @@ export function fuzzyMatch(query: string, target: string): FuzzyResult | null {
  */
 export function matchQuery(query: string, target: string): FuzzyResult | null {
   return fuzzyMatch(query.replace(/\s+/g, ""), target);
+}
+
+export interface Segment {
+  text: string;
+  matched: boolean;
+}
+
+/**
+ * Split `target` into matched/unmatched runs for `query`'s subsequence, for
+ * rendering highlights.  Routes through `matchQuery` (same space-stripping,
+ * same positions the ranker used) so a highlight is consistent with what
+ * matched the assert: a field lights up iff it contributed to ranking.
+ *
+ * Returns `null` when there's no usable match — an empty/whitespace query,
+ * a non-subsequence, or a `score === 0` dead path (which `filterSection`
+ * also treats as a non-match) — so the caller renders the target plain.
+ * Pure, no TUI deps; unit-testable alongside `fuzzyMatch`.
+ */
+export function highlightSegments(query: string, target: string): Segment[] | null {
+  const m = matchQuery(query, target);
+  if (!m || m.score === 0) return null;
+
+  const matched = new Set(m.positions);
+  const segs: Segment[] = [];
+  let buf = "";
+  let bufMatched = false;
+  for (let i = 0; i < target.length; i++) {
+    const isMatched = matched.has(i);
+    if (i === 0) {
+      buf = target[i]!;
+      bufMatched = isMatched;
+      continue;
+    }
+    if (isMatched === bufMatched) {
+      buf += target[i]!;
+    } else {
+      segs.push({ text: buf, matched: bufMatched });
+      buf = target[i]!;
+      bufMatched = isMatched;
+    }
+  }
+  if (buf.length > 0) segs.push({ text: buf, matched: bufMatched });
+  return segs;
 }
 
 /** Per-field scorer config: which `Assert` field, and its dominance tier. */
