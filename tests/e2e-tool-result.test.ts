@@ -22,7 +22,7 @@ import {
   type ExtensionContext,
 } from "../pi-assert/engine.js";
 
-import { executeToolResultAsserts } from "../pi-assert/executor.js";
+import { executeToolResultAsserts, type RunRecord } from "../pi-assert/executor.js";
 
 // ── Temp dir helpers ───────────────────────────────────────────────
 
@@ -601,5 +601,170 @@ describe("e2e: tool_result orchestration", () => {
     const result = await executeToolResultAsserts(asserts, event, defaultCtx);
     assert.ok(result);
     assert.strictEqual(result!.patch.isError, true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// onRun callback (runtime visibility, tool_result)
+// ═══════════════════════════════════════════════════════════════════
+
+describe("e2e: tool_result onRun callback", () => {
+  // R.1 ── onRun fires once per executed assert with correct fields ─
+
+  it("onRun fires once per executed assert with name/hook/durationMs/passed", async () => {
+    const cwd = setupConfig("e2e-tr-onrun-basic", {
+      "passing-assert": {
+        description: "d",
+        hook: "tool_result",
+        filter: { toolName: "read" },
+        shell: "true",
+      },
+      "failing-assert": {
+        description: "d",
+        hook: "tool_result",
+        filter: { toolName: "read" },
+        shell: "false",
+      },
+      "skipped-by-filter": {
+        description: "d",
+        hook: "tool_result",
+        filter: { toolName: "bash" },
+        shell: "false",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+    const runs: RunRecord[] = [];
+
+    // fail-fast stops at the first failing assert; in load order that's
+    // passing-assert (runs), then failing-assert (runs + patches).
+    await executeToolResultAsserts(
+      asserts,
+      makeReadResult("x"),
+      defaultCtx,
+      (r) => runs.push(r),
+    );
+
+    assert.strictEqual(runs.length, 2);
+    assert.strictEqual(runs[0].name, "passing-assert");
+    assert.strictEqual(runs[0].hook, "tool_result");
+    assert.strictEqual(runs[0].passed, true);
+    assert.ok(
+      Number.isInteger(runs[0].durationMs) && runs[0].durationMs >= 0,
+    );
+
+    assert.strictEqual(runs[1].name, "failing-assert");
+    assert.strictEqual(runs[1].hook, "tool_result");
+    assert.strictEqual(runs[1].passed, false);
+    assert.ok(
+      Number.isInteger(runs[1].durationMs) && runs[1].durationMs >= 0,
+    );
+  });
+
+  // R.2 ── Filter mismatch → onRun not called ─────────────────────
+
+  it("onRun not called for filter mismatches", async () => {
+    const cwd = setupConfig("e2e-tr-onrun-filter-miss", {
+      "no-secrets-in-reads": {
+        description: "d",
+        hook: "tool_result",
+        filter: { toolName: "read" },
+        shell: "false",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+    const runs: RunRecord[] = [];
+
+    // bash does not match { toolName: read }
+    await executeToolResultAsserts(
+      asserts,
+      makeBashResult("SECRET=x"),
+      defaultCtx,
+      (r) => runs.push(r),
+    );
+
+    assert.strictEqual(runs.length, 0);
+  });
+
+  // R.3 ── when fails → onRun not called (shell never runs) ───────
+
+  it("onRun not called when `when` fails (assert skipped)", async () => {
+    const cwd = setupConfig("e2e-tr-onrun-when-fail", {
+      "skipped": {
+        description: "d",
+        hook: "tool_result",
+        when: "false",
+        shell: "false",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+    const runs: RunRecord[] = [];
+
+    await executeToolResultAsserts(
+      asserts,
+      makeReadResult("x"),
+      defaultCtx,
+      (r) => runs.push(r),
+    );
+
+    assert.strictEqual(runs.length, 0);
+  });
+
+  // R.4 ── onRun called for passing asserts (visibility into passes) ─
+
+  it("onRun fires for passing asserts (not just failures)", async () => {
+    const cwd = setupConfig("e2e-tr-onrun-pass", {
+      "always-ok": {
+        description: "d",
+        hook: "tool_result",
+        shell: "true",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+    const runs: RunRecord[] = [];
+
+    await executeToolResultAsserts(
+      asserts,
+      makeReadResult("clean"),
+      defaultCtx,
+      (r) => runs.push(r),
+    );
+
+    assert.strictEqual(runs.length, 1);
+    assert.strictEqual(runs[0].passed, true);
+  });
+
+  // R.5 ── fail-fast stops onRun for later asserts ───────────────
+
+  it("onRun not called for asserts after a fail-fast patch", async () => {
+    const cwd = setupConfig("e2e-tr-onrun-failfast", {
+      "blocker": {
+        description: "d",
+        hook: "tool_result",
+        shell: "false",
+      },
+      "never-reached": {
+        description: "d",
+        hook: "tool_result",
+        shell: "true",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+    const runs: RunRecord[] = [];
+
+    await executeToolResultAsserts(
+      asserts,
+      makeReadResult("x"),
+      defaultCtx,
+      (r) => runs.push(r),
+    );
+
+    assert.strictEqual(runs.length, 1);
+    assert.strictEqual(runs[0].name, "blocker");
+    assert.strictEqual(runs[0].passed, false);
   });
 });

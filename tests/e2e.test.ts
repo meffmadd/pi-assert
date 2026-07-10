@@ -24,6 +24,8 @@ import {
 import {
   executeToolCallAsserts,
   executeAgentEndAsserts,
+  formatRunReport,
+  type RunRecord,
 } from "../pi-assert/executor.js";
 
 // ── Convenience alias ──────────────────────────────────────────────
@@ -952,5 +954,272 @@ describe("e2e: agent_end orchestration", () => {
 
     const failures = await executeAgentEndAsserts(asserts, agentEndEvent, ctx);
     assert.deepStrictEqual(failures, []);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// onRun callback (runtime visibility)
+// ═══════════════════════════════════════════════════════════════════
+//
+// `onRun` is the side-channel `runAsserts` uses to report each assert whose
+// main `shell` actually executed, without changing its return type. These
+// tests pin the contract: it fires once per executed shell, never for filter
+// or `when` skips, and carries name/hook/durationMs/passed.
+// ═══════════════════════════════════════════════════════════════════
+
+describe("e2e: onRun callback", () => {
+  const writeEvent: ToolCallEvent = {
+    toolName: "write",
+    toolCallId: "c1",
+    input: { path: "/f" },
+  };
+
+  // R.1 ── onRun fires once per matching assert with correct fields ─
+
+  it("onRun fires once per executed assert with name/hook/durationMs/passed", async () => {
+    const cwd = setupConfig("e2e-onrun-basic", {
+      "passing-assert": {
+        description: "d",
+        hook: "tool_call",
+        filter: { toolName: "write" },
+        shell: "true",
+      },
+      "failing-assert": {
+        description: "d",
+        hook: "tool_call",
+        filter: { toolName: "write" },
+        shell: "false",
+      },
+      "skipped-by-filter": {
+        description: "d",
+        hook: "tool_call",
+        filter: { toolName: "read" },
+        shell: "false",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+    const runs: RunRecord[] = [];
+
+    // fail-fast stops at the first failing assert; in load order that's
+    // passing-assert (runs), then failing-assert (runs + blocks). The
+    // third (skipped-by-filter) never matches.
+    await runAsserts(asserts, writeEvent, defaultCtx, (r) => runs.push(r));
+
+    assert.strictEqual(runs.length, 2);
+    assert.strictEqual(runs[0].name, "passing-assert");
+    assert.strictEqual(runs[0].hook, "tool_call");
+    assert.strictEqual(runs[0].passed, true);
+    assert.ok(
+      Number.isInteger(runs[0].durationMs) && runs[0].durationMs >= 0,
+      `durationMs is a non-negative integer, got ${runs[0].durationMs}`,
+    );
+
+    assert.strictEqual(runs[1].name, "failing-assert");
+    assert.strictEqual(runs[1].hook, "tool_call");
+    assert.strictEqual(runs[1].passed, false);
+    assert.ok(
+      Number.isInteger(runs[1].durationMs) && runs[1].durationMs >= 0,
+      `durationMs is a non-negative integer, got ${runs[1].durationMs}`,
+    );
+  });
+
+  // R.2 ── Filter mismatch → onRun not called ─────────────────────
+
+  it("onRun not called for filter mismatches", async () => {
+    const cwd = setupConfig("e2e-onrun-filter-miss", {
+      "block-writes": {
+        description: "d",
+        hook: "tool_call",
+        filter: { toolName: "write" },
+        shell: "false",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+    const runs: RunRecord[] = [];
+
+    // bash does not match { toolName: write }
+    const bashEvent: ToolCallEvent = {
+      toolName: "bash",
+      toolCallId: "c",
+      input: { command: "ls" },
+    };
+    await runAsserts(asserts, bashEvent, defaultCtx, (r) => runs.push(r));
+
+    assert.strictEqual(runs.length, 0);
+  });
+
+  // R.3 ── when fails → onRun not called (shell never runs) ───────
+
+  it("onRun not called when `when` fails (assert skipped)", async () => {
+    const cwd = setupConfig("e2e-onrun-when-fail", {
+      "skipped": {
+        description: "d",
+        hook: "tool_call",
+        when: "false",
+        shell: "false",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+    const runs: RunRecord[] = [];
+
+    await runAsserts(asserts, writeEvent, defaultCtx, (r) => runs.push(r));
+
+    assert.strictEqual(runs.length, 0);
+  });
+
+  // R.4 ── when passes → onRun called (main shell ran) ────────────
+
+  it("onRun called when `when` passes and main shell runs", async () => {
+    const cwd = setupConfig("e2e-onrun-when-pass", {
+      "guarded": {
+        description: "d",
+        hook: "tool_call",
+        when: "true",
+        shell: "true",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+    const runs: RunRecord[] = [];
+
+    await runAsserts(asserts, writeEvent, defaultCtx, (r) => runs.push(r));
+
+    assert.strictEqual(runs.length, 1);
+    assert.strictEqual(runs[0].name, "guarded");
+    assert.strictEqual(runs[0].passed, true);
+  });
+
+  // R.5 ── onRun called for passing asserts (visibility into passes) ─
+
+  it("onRun fires for passing asserts (not just failures)", async () => {
+    const cwd = setupConfig("e2e-onrun-pass", {
+      "always-ok": {
+        description: "d",
+        hook: "tool_call",
+        shell: "true",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+    const runs: RunRecord[] = [];
+
+    await runAsserts(asserts, writeEvent, defaultCtx, (r) => runs.push(r));
+
+    assert.strictEqual(runs.length, 1);
+    assert.strictEqual(runs[0].passed, true);
+  });
+
+  // R.6 ── Multiple asserts → onRun called once each in order ─────
+
+  it("onRun called once per matching assert in order (no fail-fast)", async () => {
+    // Use agent_end (collect mode, no fail-fast) so both passing asserts run.
+    const cwd = setupConfig("e2e-onrun-agent-end", {
+      "check-a": {
+        description: "d",
+        hook: "agent_end",
+        shell: "true",
+      },
+      "check-b": {
+        description: "d",
+        hook: "agent_end",
+        shell: "true",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+    const runs: RunRecord[] = [];
+
+    await executeAgentEndAsserts(
+      asserts,
+      {},
+      defaultCtx,
+      (r) => runs.push(r),
+    );
+
+    assert.strictEqual(runs.length, 2);
+    assert.strictEqual(runs[0].name, "check-a");
+    assert.strictEqual(runs[0].hook, "agent_end");
+    assert.strictEqual(runs[1].name, "check-b");
+    assert.strictEqual(runs[1].hook, "agent_end");
+  });
+
+  // R.7 ── onRun omitted (undefined) → executors behave as before ──
+
+  it("onRun optional: omitting it changes nothing", async () => {
+    const cwd = setupConfig("e2e-onrun-omitted", {
+      "block-writes": {
+        description: "d",
+        hook: "tool_call",
+        filter: { toolName: "write" },
+        shell: "false",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+    // No onRun argument — should still block normally.
+    const block = await runAsserts(asserts, writeEvent, defaultCtx);
+    assert.ok(block);
+  });
+
+  // R.8 ── fail-fast stops onRun for later asserts ───────────────
+
+  it("onRun not called for asserts after a fail-fast block", async () => {
+    const cwd = setupConfig("e2e-onrun-failfast", {
+      "blocker": {
+        description: "d",
+        hook: "tool_call",
+        shell: "false",
+      },
+      "never-reached": {
+        description: "d",
+        hook: "tool_call",
+        shell: "true",
+      },
+    });
+
+    const asserts = loadAsserts(cwd);
+    const runs: RunRecord[] = [];
+
+    await runAsserts(asserts, writeEvent, defaultCtx, (r) => runs.push(r));
+
+    // blocker runs and fails → fail-fast → never-reached never executes.
+    assert.strictEqual(runs.length, 1);
+    assert.strictEqual(runs[0].name, "blocker");
+    assert.strictEqual(runs[0].passed, false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// formatRunReport
+// ═══════════════════════════════════════════════════════════════════
+
+describe("formatRunReport", () => {
+  it("returns empty string for zero runs", () => {
+    assert.strictEqual(formatRunReport([]), "");
+  });
+
+  it("formats a single run with singular 'command'", () => {
+    const runs: RunRecord[] = [
+      { name: "check-clean", hook: "agent_end", durationMs: 3, passed: false },
+    ];
+    assert.strictEqual(
+      formatRunReport(runs),
+      "pi-assert ran 1 command in 3ms",
+    );
+  });
+
+  it("formats multiple runs with plural 'commands' and summed duration", () => {
+    const runs: RunRecord[] = [
+      { name: "block-writes", hook: "tool_call", durationMs: 4, passed: true },
+      { name: "no-secrets", hook: "tool_result", durationMs: 12, passed: true },
+      { name: "check-clean", hook: "agent_end", durationMs: 3, passed: false },
+    ];
+    assert.strictEqual(
+      formatRunReport(runs),
+      "pi-assert ran 3 commands in 19ms",
+    );
   });
 });

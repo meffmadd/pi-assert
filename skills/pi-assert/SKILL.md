@@ -345,6 +345,7 @@ Multiple agent-end asserts batch into a single message:
 7. The `false` Unix command always exits 1 — use it for unconditional blocks.
 8. If either `asserts.json` fails to parse, pi-assert shows an error notification naming the file and the parse error, **no asserts are loaded**, and the status bar shows `pi-assert: config error (N files)` until the file is fixed. This is a hard-fail — a broken config blocks all asserts, even from a working sibling file.
 9. Installing an assert that overwrites an existing one in the same repo section shows a warning notification; the install still succeeds (last install wins).
+10. **Runtime visibility:** when any assert's `shell` actually runs (filter matched + `when` passed/absent), pi-assert tracks its duration. After each hook that ran at least one assert, a transient **info toast** is shown in the TUI — e.g. `pi-assert ran 3 commands in 19ms`. This is purely a notification: it never enters the conversation, never triggers a turn, and the agent never sees it. It's omitted entirely when a hook ran no asserts, and it surfaces passing asserts too, giving visibility into the guard layer. Asserts skipped by a `when` precondition are not recorded (they never triggered). The runtime toast is separate from the failure path: failures are still reported as actionable messages so the agent can address them.
 
 ## Toggling `default` from the UI
 
