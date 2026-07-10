@@ -93,6 +93,7 @@ export const HINT_ENTER_CONFIRM: [string, string] = ["Enter", "confirm"];
 export const HINT_ENTER_ENABLE: [string, string] = ["Enter", "enable"];
 export const HINT_ESC_CANCEL: [string, string] = ["Esc", "to cancel"];
 export const HINT_ESC_BACK: [string, string] = ["Esc", "back"];
+export const HINT_ESC_EXIT_SEARCH: [string, string] = ["Esc", "exit search"];
 export const HINT_T_TOGGLE_DEFAULT: [string, string] = ["t", "Toggle default"];
 export const HINT_D_DISABLE_ALL: [string, string] = ["d", "Disable all"];
 export const HINT_R_REMOVE: [string, string] = ["r", "Remove"];

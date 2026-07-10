@@ -12,6 +12,7 @@ import {
   HINT_D_DISABLE_ALL,
   HINT_ENTER_ENABLE,
   HINT_ESC_CANCEL,
+  HINT_ESC_EXIT_SEARCH,
   HINT_I_INSTALL_ASSERTS,
   HINT_R_REMOVE,
   HINT_T_TOGGLE_DEFAULT,
@@ -618,9 +619,8 @@ export class AssertsPanel {
 
     if (this.searchActive) {
       const items: [string, string][] = [
-        ["Esc", "exit search"],
-        ["↑/Down", "move"],
         HINT_ENTER_ENABLE,
+        HINT_ESC_EXIT_SEARCH,
       ];
       if (this.groups.length > 1) items.push(HINT_TAB_CYCLE_SECTION);
       return renderHintLine(this.theme, width, items);
