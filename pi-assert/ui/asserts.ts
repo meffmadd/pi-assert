@@ -16,7 +16,6 @@ import {
   HINT_I_INSTALL_ASSERTS,
   HINT_R_REMOVE,
   HINT_T_TOGGLE_DEFAULT,
-  HINT_TAB_CYCLE_SECTION,
   OverlayBox,
   SectionNavigator,
   dialogOverlay,
@@ -332,7 +331,7 @@ export class AssertsPanel {
     const [start, end] = this.activeWindow(activeVisible);
 
     let coreLines: string[] = [
-      this.renderSectionHeader(activeGroup, true),
+      this.renderSectionHeader(focusedSection),
       ...this.renderSection(
         width,
         activeGroup,
@@ -355,7 +354,7 @@ export class AssertsPanel {
     // Always show the immediate previous and next section headers.
     if (showPrev) {
       coreLines = [
-        this.renderSectionHeader(this.groups[focusedSection - 1], false),
+        this.renderSectionHeader(focusedSection - 1),
         "",
         ...coreLines,
       ];
@@ -364,7 +363,7 @@ export class AssertsPanel {
       coreLines = [
         ...coreLines,
         "",
-        this.renderSectionHeader(this.groups[focusedSection + 1], false),
+        this.renderSectionHeader(focusedSection + 1),
       ];
     }
 
@@ -383,7 +382,7 @@ export class AssertsPanel {
     ) {
       progressed = false;
       if (above >= 0) {
-        const block = this.renderInactiveSectionHeader(this.groups[above]);
+        const block = this.renderInactiveSectionHeader(above);
         if (block.length + 1 <= remaining) {
           lines = [...block, "", ...lines];
           remaining -= block.length + 1;
@@ -392,7 +391,7 @@ export class AssertsPanel {
         }
       }
       if (below < this.groups.length) {
-        const block = this.renderInactiveSectionHeader(this.groups[below]);
+        const block = this.renderInactiveSectionHeader(below);
         if (block.length + 1 <= remaining) {
           lines = [...lines, "", ...block];
           remaining -= block.length + 1;
@@ -411,7 +410,7 @@ export class AssertsPanel {
     for (let i = 0; i < this.groups.length; i++) {
       const g = this.groups[i];
       const isFocused = i === this.nav.focusedSection;
-      lines.push(this.renderSectionHeader(g, isFocused));
+      lines.push(this.renderSectionHeader(i));
       lines.push(...this.renderSection(width, g, isFocused, this.nav.focusedIndex));
       if (i < this.groups.length - 1) lines.push("");
     }
@@ -470,10 +469,36 @@ export class AssertsPanel {
     );
   }
 
-  private renderSectionHeader(group: Group, focused: boolean): string {
+  private renderSectionHeader(index: number): string {
+    const group = this.groups[index];
+    const focused = index === this.nav.focusedSection;
     const header = group.source === "local" ? "Local" : group.source;
     const color = focused ? "accent" : "muted";
-    return `  ${this.theme.fg(color, header)}`;
+    const keys = this.sectionNavKeys(index);
+    const keyHint = keys.length
+      ? "  " + keys.map((k) => this.theme.fg("accent", k)).join(this.theme.fg("dim", " · "))
+      : "";
+    return `  ${this.theme.fg(color, header)}${keyHint}`;
+  }
+
+  /**
+   * The Tab/Shift+Tab cycle keys that land on `index`, so the section
+   * header advertises the jump in place instead of as a separate hint-line
+   * item.  Empty for the focused section (already there) and for sections
+   * that aren't a direct cycle target.  With wrap, the first/last section
+   * is reachable from the opposite end, so it carries the key too.
+   */
+  private sectionNavKeys(index: number): string[] {
+    const n = this.groups.length;
+    if (n < 2) return [];
+    const focused = this.nav.focusedSection;
+    if (index === focused) return [];
+    const nextTarget = (focused + 1) % n;
+    const prevTarget = (focused - 1 + n) % n;
+    const keys: string[] = [];
+    if (index === nextTarget) keys.push("Tab");
+    if (index === prevTarget) keys.push("Shift+Tab");
+    return keys;
   }
 
   private renderSection(
@@ -582,8 +607,8 @@ export class AssertsPanel {
     ];
   }
 
-  private renderInactiveSectionHeader(group: Group): string[] {
-    return [this.renderSectionHeader(group, false)];
+  private renderInactiveSectionHeader(index: number): string[] {
+    return [this.renderSectionHeader(index)];
   }
 
   /** Return the [start, end) slice of the active section that stays visible. */
@@ -618,12 +643,10 @@ export class AssertsPanel {
     }
 
     if (this.searchActive) {
-      const items: [string, string][] = [
+      return renderHintLine(this.theme, width, [
         HINT_ENTER_ENABLE,
         HINT_ESC_EXIT_SEARCH,
-      ];
-      if (this.groups.length > 1) items.push(HINT_TAB_CYCLE_SECTION);
-      return renderHintLine(this.theme, width, items);
+      ]);
     }
 
     const items: [string, string][] = [
@@ -635,9 +658,6 @@ export class AssertsPanel {
     }
     items.push(HINT_R_REMOVE);
     items.push(HINT_I_INSTALL_ASSERTS);
-    if (this.groups.length > 1) {
-      items.push(HINT_TAB_CYCLE_SECTION);
-    }
     items.push(HINT_ESC_CANCEL);
     return renderHintLine(this.theme, width, items);
   }
