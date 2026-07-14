@@ -9,7 +9,7 @@
  * See `fuzzy-search.md` for the full design.
  */
 
-import type { Assert } from "../engine.js";
+import type { Assert, ShellAssert, PresetAssert } from "../engine.js";
 
 export interface FuzzyResult {
   /** Higher is better. Includes the per-field tier in `filterSection`. */
@@ -192,7 +192,7 @@ export function highlightSegments(query: string, target: string): Segment[] | nu
 }
 
 /** Per-field scorer config: which `Assert` field, and its dominance tier. */
-const FIELDS: { field: keyof Assert; tier: number }[] = [
+const FIELDS: { field: keyof ShellAssert | keyof PresetAssert; tier: number }[] = [
   { field: "name", tier: 40_000 },
   { field: "description", tier: 30_000 },
   { field: "source", tier: 20_000 },

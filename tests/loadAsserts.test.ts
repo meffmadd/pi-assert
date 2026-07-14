@@ -868,6 +868,59 @@ describe("loadAsserts", () => {
         },
       ],
     },
+
+    // 1.26 ── Preset entry loads as a PresetAssert (no hook/shell)
+    {
+      label: "preset entry → loaded with preset refs, no hook/shell",
+      projectJson: {
+        local: {
+          "my-preset": {
+            description: "Block destructive writes",
+            preset: ["local/block-rm-rf", "meffmadd/pi-assert-rules/protect-env"],
+            default: false,
+          },
+        },
+      },
+      expected: [
+        {
+          name: "my-preset",
+          source: "local",
+          description: "Block destructive writes",
+          preset: ["local/block-rm-rf", "meffmadd/pi-assert-rules/protect-env"],
+          default: false,
+        },
+      ],
+    },
+
+    // 1.27 ── Preset and assert coexist in the same section
+    {
+      label: "preset + assert in same section → both loaded with their own shape",
+      projectJson: {
+        local: {
+          guard: { description: "d", hook: "tool_call", shell: "false" },
+          bundle: { description: "bundle", preset: ["local/guard"] },
+        },
+      },
+      expected: [
+        {
+          name: "guard",
+          source: "local",
+          description: "d",
+          hook: "tool_call",
+          filter: undefined,
+          when: undefined,
+          shell: "false",
+          default: false,
+        },
+        {
+          name: "bundle",
+          source: "local",
+          description: "bundle",
+          preset: ["local/guard"],
+          default: false,
+        },
+      ],
+    },
   ];
 
   // ── Run cases ────────────────────────────────────────────────────

@@ -51,6 +51,23 @@ function makePanel(asserts: Assert[], active: Set<string> = new Set()): AssertsP
   return panel;
 }
 
+/** A preset referencing `refs` (qualified `source/name` refs). */
+function makePreset(
+  name: string,
+  refs: string[],
+  source = "local",
+  isDefault = false,
+): Assert {
+  return {
+    name,
+    source,
+    description: "d",
+    preset: refs,
+    default: isDefault,
+    path: `/tmp/${name}.json`,
+  };
+}
+
 /** Minimal ExtensionContext mock for handleInput tests. */
 function makeCtx(): ExtensionContext {
   return {
@@ -85,7 +102,7 @@ describe("AssertsPanel", () => {
     const lines = panel.render(80);
     const highlighted = focusedLine(lines);
 
-    assert.equal(highlighted, "[> ][alpha]  [disabled]");
+    assert.equal(highlighted, "[> ][alpha]  disabled");
   });
 
   it("moves the highlight down on arrow down", () => {
@@ -101,7 +118,7 @@ describe("AssertsPanel", () => {
     const lines = panel.render(80);
     const highlighted = focusedLine(lines);
 
-    assert.equal(highlighted, "[> ][beta ]  [disabled]");
+    assert.equal(highlighted, "[> ][beta ]  disabled");
     assert.ok(
       lines.some((line) => line.includes("alpha") && !line.startsWith("[> ][alpha]")),
       "previous item should no longer be highlighted",
@@ -122,7 +139,7 @@ describe("AssertsPanel", () => {
     const lines = panel.render(80);
     const highlighted = focusedLine(lines);
 
-    assert.equal(highlighted, "[> ][beta ]  [disabled]");
+    assert.equal(highlighted, "[> ][beta ]  disabled");
   });
 
   it("aligns values when default tag makes labels uneven", () => {
@@ -134,7 +151,7 @@ describe("AssertsPanel", () => {
     const lines = panel.render(80);
     const highlighted = focusedLine(lines);
 
-    assert.equal(highlighted, "[> ][short             ]  [disabled]");
+    assert.equal(highlighted, "[> ][short             ]  disabled");
   });
 
   it("windows a long active section when terminal height is constrained", () => {
@@ -1327,6 +1344,220 @@ describe("AssertsPanel fuzzy search", () => {
     const shellLine = panel.render(80).find((l) => l.includes("shell:"))!;
     assert.ok(shellLine.includes("<u>env</u>"),
       "matched chars in the shell detail are underlined on the focused row");
+  });
+});
+
+// ── Presets ───────────────────────────────────────────────────────
+//
+// M1: a preset renders in its existing local/repo group with an `asserts:`
+// detail (comma-joined refs) instead of `shell:`/`when:`.  The detail comes
+// from `renderAssertDetail` dispatching on `preset` first, and the panel's
+// `detailFor` branching on `isPreset`.
+
+describe("AssertsPanel presets", () => {
+  it("renders a preset row in the local group", () => {
+    const panel = makePanel([
+      makeAssert("guard"),
+      makePreset("bundle", ["local/guard"]),
+    ]);
+    const lines = panel.render(80);
+    assert.ok(
+      lines.some((l) => plain(l).includes("bundle")),
+      "the preset row is rendered",
+    );
+  });
+
+  it("renders an asserts: detail (comma-joined refs) for a focused preset", () => {
+    const panel = makePanel([
+      makeAssert("guard"),
+      makePreset("bundle", ["local/guard", "owner/repo/other"]),
+    ]);
+    // Focus the preset (second row in the local group).
+    panel.nav.moveWithin("down");
+    const lines = panel.render(80);
+    const assertsLine = lines.find((l) => l.includes("asserts:"));
+    assert.ok(assertsLine, "an asserts: detail line is shown for the preset");
+    assert.ok(
+      assertsLine!.includes("local/guard") && assertsLine!.includes("owner/repo/other"),
+      "both refs appear comma-joined on the asserts: line",
+    );
+    // No shell:/when: detail for a preset.
+    assert.ok(!lines.some((l) => l.includes("shell:")), "no shell: line for a preset");
+    assert.ok(!lines.some((l) => l.includes("when:")), "no when: line for a preset");
+  });
+
+  it("renders an empty preset with an asserts: label and no refs", () => {
+    const panel = makePanel([makePreset("empty", [])]);
+    const lines = panel.render(80);
+    assert.ok(
+      lines.some((l) => l.includes("asserts:")),
+      "the asserts: label shows even for an empty preset",
+    );
+  });
+
+  it("renders shell:/when: (not asserts:) for a focused shell assert", () => {
+    const panel = makePanel([
+      makeAssert("guard", "local", false, { shell: "false", when: "true" }),
+    ]);
+    const lines = panel.render(80);
+    assert.ok(lines.some((l) => l.includes("shell:")), "shell: shown for a shell assert");
+    assert.ok(lines.some((l) => l.includes("when:")), "when: shown when present");
+    assert.ok(!lines.some((l) => l.includes("asserts:")), "no asserts: line for a shell assert");
+  });
+
+  it("toggles a preset's active state like a shell assert", () => {
+    const active = new Set<string>();
+    const state = {
+      asserts: [makePreset("bundle", ["local/guard"])],
+      active,
+      enable(n: string) { active.add(n); },
+      disable(n: string) { active.delete(n); },
+      persist() {},
+      updateStatus() {},
+    } as unknown as AssertsState;
+    const panel = new AssertsPanel(state);
+    panel.setTheme(mockTheme());
+    const ctx = makeCtx();
+    // Enter toggles active on, regardless of assert kind.
+    panel.handleInput("\r", ctx);
+    assert.ok(active.has("bundle"), "preset is enabled after Enter");
+    panel.handleInput("\r", ctx);
+    assert.ok(!active.has("bundle"), "preset is disabled after a second Enter");
+  });
+});
+
+// M1.5: preset coverage — a member of an active preset shows
+// `active · via {preset}` instead of `disabled` when not individually active.
+// The `via {preset}` run is accent; `active` is dim.  An individually active
+// member shows just `enabled` (accent).  These tests use the mock theme where
+// accent = `[...]`, so `via safety` renders as `[via safety]`.
+describe("AssertsPanel preset coverage status", () => {
+  it("shows 'active · via {preset}' for a member of an active preset (focused)", () => {
+    const panel = makePanel(
+      [makeAssert("guard"), makePreset("safety", ["local/guard"])],
+      new Set(["safety"]),
+    );
+    const lines = panel.render(80);
+    const guardLine = lines.find((l) => plain(l).includes("guard"));
+    assert.ok(guardLine, "guard row is rendered");
+    // `guard` is not individually active, but `safety` (active) references it.
+    assert.ok(
+      plain(guardLine!).includes("active") && guardLine!.includes("[via safety]"),
+      "focused member shows 'active · via safety'",
+    );
+    assert.ok(
+      !plain(guardLine!).includes("disabled"),
+      "not 'disabled' when covered by an active preset",
+    );
+  });
+
+  it("shows 'active · via {preset}' for a member in a non-focused section", () => {
+    const panel = makePanel(
+      [
+        makeAssert("guard", "local"),
+        makePreset("safety", ["local/guard"], "local"),
+        makeAssert("other", "owner/repo"),
+      ],
+      new Set(["safety"]),
+    );
+    // Focus the repo section so the local section is non-focused (dimmed).
+    panel.nav.cycleSection("next");
+    const lines = panel.render(80);
+    const guardLine = lines.find((l) => l.includes("guard"));
+    assert.ok(guardLine, "guard row is rendered in the non-focused section");
+    assert.ok(
+      plain(guardLine!).includes("active") && guardLine!.includes("[via safety]"),
+      "non-focused member also shows 'active · via safety'",
+    );
+  });
+
+  it("shows 'enabled' (not 'via') when a member is active individually too", () => {
+    const panel = makePanel(
+      [makeAssert("guard"), makePreset("safety", ["local/guard"])],
+      new Set(["guard", "safety"]),
+    );
+    const lines = panel.render(80);
+    const guardLine = lines.find((l) => plain(l).includes("guard"));
+    assert.ok(guardLine, "guard row is rendered");
+    assert.ok(
+      plain(guardLine!).includes("enabled"),
+      "individually active member shows 'enabled'",
+    );
+    assert.ok(
+      !guardLine!.includes("via"),
+      "no 'via' suffix when already active individually",
+    );
+  });
+
+  it("shows 'disabled' when the covering preset is inactive", () => {
+    const panel = makePanel(
+      [makeAssert("guard"), makePreset("safety", ["local/guard"])],
+      new Set(), // nothing active
+    );
+    const lines = panel.render(80);
+    const guardLine = lines.find((l) => plain(l).includes("guard"));
+    assert.ok(guardLine, "guard row is rendered");
+    assert.ok(
+      plain(guardLine!).includes("disabled"),
+      "member shows 'disabled' when the preset is inactive",
+    );
+    assert.ok(
+      !guardLine!.includes("via"),
+      "no 'via' suffix when the preset is inactive",
+    );
+  });
+
+  it("collapses multiple covering presets to 'via {n} presets'", () => {
+    const panel = makePanel(
+      [
+        makeAssert("guard"),
+        makePreset("p1", ["local/guard"]),
+        makePreset("p2", ["local/guard"]),
+      ],
+      new Set(["p1", "p2"]),
+    );
+    const lines = panel.render(80);
+    const guardLine = lines.find((l) => plain(l).includes("guard"));
+    assert.ok(guardLine, "guard row is rendered");
+    assert.ok(
+      guardLine!.includes("[via 2 presets]"),
+      "multiple covering presets collapse to 'via 2 presets'",
+    );
+  });
+
+  it("updates coverage status after toggling the preset off", () => {
+    const active = new Set<string>(["safety"]);
+    const state = {
+      asserts: [makeAssert("guard"), makePreset("safety", ["local/guard"])],
+      active,
+      enable(n: string) { active.add(n); },
+      disable(n: string) { active.delete(n); },
+      persist() {},
+      updateStatus() {},
+    } as unknown as AssertsState;
+    const panel = new AssertsPanel(state);
+    panel.setTheme(mockTheme());
+    const ctx = makeCtx();
+
+    // Initially: guard shows 'active · via safety'.
+    let lines = panel.render(80);
+    let guardLine = lines.find((l) => plain(l).includes("guard"));
+    assert.ok(guardLine!.includes("[via safety]"), "initially covered by safety");
+
+    // Focus the preset (2nd row) and toggle it off.
+    panel.nav.moveWithin("down");
+    panel.handleInput("\r", ctx);
+    assert.ok(!active.has("safety"), "safety toggled off");
+
+    // After toggle: guard shows 'disabled' (no active preset covers it).
+    panel.nav.moveWithin("up"); // focus back to guard
+    lines = panel.render(80);
+    guardLine = lines.find((l) => plain(l).includes("guard"));
+    assert.ok(
+      plain(guardLine!).includes("disabled"),
+      "guard reverts to 'disabled' after the covering preset is toggled off",
+    );
+    assert.ok(!guardLine!.includes("via"), "no 'via' after toggle-off");
   });
 });
 

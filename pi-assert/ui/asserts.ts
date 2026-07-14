@@ -6,7 +6,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import type { Assert } from "../engine.js";
+import { isPreset, type Assert } from "../engine.js";
 import { fetchRepoEntries, removeRule, setAssertDefault } from "../installer.js";
 import {
   HINT_D_DISABLE_ALL,
@@ -54,6 +54,41 @@ function groupBySource(asserts: Assert[]): Group[] {
 }
 
 // ---------------------------------------------------------------------------
+// Preset coverage — the reverse of `activeList()`'s expansion.
+//
+// For each shell assert that is a member of an **active** preset, this maps
+// `source\x00name` → the names of the active presets that reference it.
+// Mirrors `activeList()` exactly: only active presets contribute, dangling
+// and nested-preset refs are skipped, refs split on the last `/`.  Used by
+// `renderStatus` to show `active · via {preset}` on a member that isn't
+// individually active but runs because an active preset expanded to it.
+// ---------------------------------------------------------------------------
+function buildPresetCoverage(
+  asserts: Assert[],
+  active: Set<string>,
+): Map<string, string[]> {
+  const byKey = new Map(
+    asserts.map((a) => [`${a.source}\x00${a.name}`, a]),
+  );
+  const coverage = new Map<string, string[]>();
+  for (const a of asserts) {
+    if (!active.has(a.name) || !isPreset(a)) continue;
+    for (const ref of a.preset) {
+      const idx = ref.lastIndexOf("/");
+      const member = idx >= 0
+        ? byKey.get(ref.slice(0, idx) + "\x00" + ref.slice(idx + 1))
+        : undefined;
+      if (!member || isPreset(member)) continue; // dangling or nested → skip
+      const key = `${member.source}\x00${member.name}`;
+      const list = coverage.get(key) ?? [];
+      list.push(a.name);
+      coverage.set(key, list);
+    }
+  }
+  return coverage;
+}
+
+// ---------------------------------------------------------------------------
 // AssertsPanel — model + render + input for the /asserts toggle UI.
 // ---------------------------------------------------------------------------
 type PanelAction = "cancel" | "install" | "reload";
@@ -86,6 +121,19 @@ export class AssertsPanel {
    * never orphaned.
    */
   private orphaned = new Set<string>();
+
+  /**
+   * Reverse map: `source\x00name` → active preset names that reference it.
+   * Lazy-computed and invalidated on toggle/disable-all (`_coverage = null`).
+   * See {@link buildPresetCoverage}.
+   */
+  private _coverage: Map<string, string[]> | null = null;
+  private get coverage(): Map<string, string[]> {
+    if (this._coverage === null) {
+      this._coverage = buildPresetCoverage(this.state.asserts, this.state.active);
+    }
+    return this._coverage;
+  }
 
   /** Re-render trigger, set by the caller so async fetch resolution can flip badges in. */
   private requestRender: () => void = () => {};
@@ -442,6 +490,37 @@ export class AssertsPanel {
   }
 
   /**
+   * Styled status string for an assert row.  Three states:
+   *
+   *  - individually active → `enabled` (accent)
+   *  - covered by an active preset but not individually active →
+   *    `active · via {preset}` where `active` is dim and `via {preset}`
+   *    is accent
+   *  - disabled → `disabled` (dim)
+   *
+   * An assert active both individually and via a preset shows just `enabled`
+   * (the `via` is redundant — it runs either way).  Multiple covering presets
+   * collapse to `via {n} presets`.
+   */
+  private renderStatus(a: Assert): string {
+    if (this.state.active.has(a.name)) {
+      return this.theme.fg("accent", "enabled");
+    }
+    const via = this.coverage.get(`${a.source}\x00${a.name}`);
+    if (via && via.length > 0) {
+      const label = via.length === 1
+        ? `via ${via[0]}`
+        : `via ${via.length} presets`;
+      return (
+        this.theme.fg("dim", "active") +
+        this.theme.fg("dim", " · ") +
+        this.theme.fg("accent", label)
+      );
+    }
+    return this.theme.fg("dim", "disabled");
+  }
+
+  /**
    * Render the name (+ optional " (default)" suffix) with query matches
    * highlighted, then `padding` aligned to the label column.
    *
@@ -530,9 +609,7 @@ export class AssertsPanel {
         const labelW =
           this.plainLabel(a).length + (isOrphaned(a) ? orphanW : 0);
         const padding = " ".repeat(Math.max(0, maxLabelWidth - labelW));
-        const status = this.state.active.has(a.name)
-          ? this.theme.fg("muted", "enabled")
-          : this.theme.fg("dim", "disabled");
+        const status = this.renderStatus(a);
         lines.push(
           `   ${badge}${this.renderLabel(a, muted, accent, padding)}  ${status}`,
         );
@@ -551,7 +628,6 @@ export class AssertsPanel {
     // the badge width is reserved in `maxLabelWidth` so the status column
     // stays aligned across marked and unmarked rows.
     const theme = this.theme;
-    const active = this.state.active;
     const orphaned = this.orphaned;
     const isOrphaned = (a: Assert) => orphaned.has(`${a.source}\0${a.name}`);
     const orphanBadge = (a: Assert) =>
@@ -571,7 +647,6 @@ export class AssertsPanel {
       highlightQuery: this.searchActive ? this.query : undefined,
       renderRow: (a, selected) => {
         const badge = orphanBadge(a);
-        const status = active.has(a.name) ? "enabled" : "disabled";
         const labelW =
           this.plainLabel(a).length + (isOrphaned(a) ? orphanW : 0);
         const padding = " ".repeat(Math.max(0, maxLabelWidth - labelW));
@@ -582,12 +657,11 @@ export class AssertsPanel {
           ? (s: string) => theme.fg("accent", theme.underline(s))
           : (s: string) => theme.fg("accent", s);
         const labelText = this.renderLabel(a, base, highlight, padding);
-        const valueText = selected
-          ? theme.fg("accent", status)
-          : theme.fg("dim", status);
+        const valueText = this.renderStatus(a);
         return `${badge}${labelText}  ${valueText}`;
       },
-      detailFor: (a) => ({ shell: a.shell, when: a.when }),
+      detailFor: (a) =>
+        isPreset(a) ? { preset: a.preset } : { shell: a.shell, when: a.when },
       detailPrefix: (a) => this.orphanedDetailLines(a),
     });
   }
@@ -690,6 +764,7 @@ export class AssertsPanel {
         const { name, source } = this.confirm;
         removeRule(ctx.cwd, source, name);
         this.state.disable(name);
+        this._coverage = null;
         this.state.persist();
         this.confirm = null;
         return "reload";
@@ -729,6 +804,7 @@ export class AssertsPanel {
     if (matchesKey(data, "d")) {
       if (this.state.active.size === 0) return undefined;
       this.state.disableAll();
+      this._coverage = null;
       this.state.persist();
       this.state.updateStatus(ctx);
       return undefined;
@@ -821,6 +897,7 @@ export class AssertsPanel {
     if (!selected) return;
     if (this.state.active.has(selected.name)) this.state.disable(selected.name);
     else this.state.enable(selected.name);
+    this._coverage = null;
     this.state.persist();
     this.state.updateStatus(ctx);
   }

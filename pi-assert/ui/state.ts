@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   AssertsParseError,
+  isPreset,
   loadAsserts,
   type Assert,
   type LoadError,
@@ -139,8 +140,53 @@ export class AssertsState {
     else this.active.add(name);
   }
 
-  /** Return the subset of asserts that are currently active. */
+  /**
+   * Return the asserts that should actually run: active shell asserts, plus
+   * the shell-assert members of active presets (expanded, deduped).
+   *
+   * Single flat pass — no recursion, no cycles.  A preset referencing another
+   * preset is a dangling ref to a preset and is skipped (no nested presets for
+   * v1).  Dangling refs (a `source/name` that isn't installed) are silent at
+   * runtime — they contribute nothing (same as empty); the `§` badge surfaces
+   * it in the UI.  Dedup is by `source\x00name`, so an assert active both
+   * individually and via a preset runs once.
+   *
+   * Refs split on the **last** `/`: `local/name` → source `local`, name
+   * `name`; `owner/repo/name` → source `owner/repo`, name `name`.
+   *
+   * Only ever pushes non-preset members, so the result is effectively a
+   * `ShellAssert[]` at runtime (typed `Assert[]` so `runAsserts` keeps its
+   * `isPreset` guard for narrowing — see {@link runAsserts}).
+   */
   activeList(): Assert[] {
-    return this.asserts.filter((a) => this.active.has(a.name));
+    const byKey = new Map(
+      this.asserts.map((a) => [`${a.source}\x00${a.name}`, a]),
+    );
+    const out: Assert[] = [];
+    const seen = new Set<string>();
+    for (const a of this.asserts) {
+      if (!this.active.has(a.name)) continue;
+      if (isPreset(a)) {
+        for (const ref of a.preset) {
+          const idx = ref.lastIndexOf("/"); // last "/", not first
+          const member =
+            idx >= 0
+              ? byKey.get(ref.slice(0, idx) + "\x00" + ref.slice(idx + 1))
+              : undefined;
+          if (!member || isPreset(member)) continue; // dangling or nested → skip
+          const key = `${member.source}\x00${member.name}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push(member);
+        }
+      } else {
+        const key = `${a.source}\x00${a.name}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          out.push(a);
+        }
+      }
+    }
+    return out;
   }
 }

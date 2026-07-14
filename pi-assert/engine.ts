@@ -7,20 +7,43 @@ import {
   iterSections,
   readSectionedFile,
   validateEntryShape,
+  validatePresetShape,
   type SectionedFile,
 } from "./config.js";
 
 // ---------------------------------------------------------------------------
 // Types
+//
+// `Assert` is a discriminated union: a `ShellAssert` (the original
+// shell-based assert) or a `PresetAssert` (a named bundle of refs that
+// `activeList()` expands to shell asserts).  The executor only ever runs
+// shell asserts; presets expand to shell asserts in `activeList()` and
+// never reach `runAsserts`.  `isPreset` narrows the union at the seams
+// where the two shapes diverge (executor loop, panel `detailFor`, fuzzy
+// `FIELDS`).
 // ---------------------------------------------------------------------------
 
-export interface Assert {
-  /** Unique name of this assert. */
+/** Fields shared by every assert entry, shell or preset. */
+export interface AssertBase {
+  /** Unique name of this assert (or preset). */
   name: string;
   /** Source section: "local" or a repo key like "owner/repo". */
   source: string;
-  /** Human-readable description of what this assert guards. */
+  /** Human-readable description of what this assert (or preset) guards. */
   description: string;
+  /** Whether this entry is active by default for new sessions (default false). */
+  default: boolean;
+  /**
+   * Absolute path of the asserts.json file this entry was loaded from.
+   * Populated by `loadAsserts` so the UI can write back to the correct
+   * file when toggling `default`. Optional because callers may construct
+   * `Assert` objects by hand (e.g. in tests).
+   */
+  path?: string;
+}
+
+/** A shell-based assert: `shell` (+ optional `when`/`filter`) run on a hook. */
+export interface ShellAssert extends AssertBase {
   /** Pi event name to intercept (e.g. "tool_call"). */
   hook: string;
   /**
@@ -36,15 +59,25 @@ export interface Assert {
   when?: string;
   /** Shell command string whose exit code decides pass/fail. */
   shell: string;
-  /** Whether this assert is active by default for new sessions (default false). */
-  default: boolean;
-  /**
-   * Absolute path of the asserts.json file this entry was loaded from.
-   * Populated by `loadAsserts` so the UI can write back to the correct
-   * file when toggling `default`. Optional because callers may construct
-   * `Assert` objects by hand (e.g. in tests).
-   */
-  path?: string;
+}
+
+/**
+ * A named bundle of asserts: `preset` is a `string[]` of qualified
+ * `"source/name"` refs (`local/name`, 2 segments; `owner/repo/name`,
+ * 3 segments).  `activeList()` expands a preset to its referenced shell
+ * asserts (deduped); presets never reach `runAsserts`.
+ */
+export interface PresetAssert extends AssertBase {
+  /** Qualified `"source/name"` refs expanded by `activeList()`. */
+  preset: string[];
+}
+
+/** A shell assert or a preset. */
+export type Assert = ShellAssert | PresetAssert;
+
+/** Type guard: `true` for a `PresetAssert`. */
+export function isPreset(a: Assert): a is PresetAssert {
+  return "preset" in a;
 }
 
 /** Structured environment passed to shell commands for tool_call hooks. */
@@ -244,7 +277,17 @@ function keyOf(a: Assert): string {
   return `${a.source}\x00${a.name}`;
 }
 
-/** Flatten a sectioned asserts file into fully-attached `Assert` objects. */
+/**
+ * Flatten a sectioned asserts file into fully-attached `Assert` objects.
+ *
+ * Dispatches on the individual `validatePresetShape`/`validateEntryShape`
+ * **guards** (not the `validateRuleEntry` tag) so `def` narrows in each branch
+ * and `def.*` compiles.  `validateRuleEntry` returns a *tag* (`RuleEntryKind
+ * | null`), not a type guard on `def`, so `def` would stay `unknown` and
+ * `def.*` wouldn't compile — a single type guard narrows to one type, so it
+ * can't serve both branches.  The installer uses the tag; `readSections`
+ * uses the guards.
+ */
 function readSections(
   path: string,
   knownRepos?: Set<string>,
@@ -254,7 +297,16 @@ function readSections(
 
   for (const { source, entries } of iterSections(file, knownRepos)) {
     for (const [name, def] of Object.entries(entries)) {
-      if (validateEntryShape(def)) {
+      if (validatePresetShape(def)) {
+        results.push({
+          name,
+          source,
+          description: def.description,
+          preset: def.preset,
+          default: def.default ?? false,
+          path,
+        });
+      } else if (validateEntryShape(def)) {
         results.push({
           name,
           source,

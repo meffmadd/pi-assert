@@ -4,7 +4,9 @@ import {
   buildAgentEndEnv,
   buildResultEnv,
   evaluateShell,
+  isPreset,
   type Assert,
+  type ShellAssert,
   type ShellResult,
   type AgentEndEvent,
   type ToolCallEvent,
@@ -65,12 +67,16 @@ async function runAsserts<Evt, T>(
     hook: string;
     candidate: Record<string, unknown>;
     buildEnv: (event: Evt, ctx: ExtensionContext) => Record<string, string>;
-    onFail: (assert: Assert, result: ShellResult) => FailDecision<T>;
+    onFail: (assert: ShellAssert, result: ShellResult) => FailDecision<T>;
     /** Called once per assert whose main `shell` executed, with its run record. */
     onRun?: (record: RunRecord) => void;
   },
 ): Promise<T | undefined> {
   for (const assert of asserts) {
+    // Presets expand to shell asserts in `activeList()` and never reach here;
+    // the guard is unreachable at runtime but narrows `assert` to `ShellAssert`
+    // for the loop body (which reads `hook`/`filter`/`when`/`shell`).
+    if (isPreset(assert)) continue;
     if (assert.hook !== opts.hook) continue;
     if (!matchFilter(assert.filter, opts.candidate)) continue;
 

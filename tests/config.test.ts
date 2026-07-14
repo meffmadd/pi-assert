@@ -14,7 +14,10 @@ import {
   iterSections,
   projectFilePath,
   readSectionedFile,
+  REF_RE,
   validateEntryShape,
+  validatePresetShape,
+  validateRuleEntry,
   writeSectionedFile,
   type SectionedFile,
 } from "../pi-assert/config.js";
@@ -213,5 +216,145 @@ describe("writeSectionedFile", () => {
 describe("projectFilePath", () => {
   it("resolves <cwd>/.pi/asserts.json", () => {
     assert.equal(projectFilePath("/tmp/proj"), join("/tmp/proj", ".pi", "asserts.json"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// REF_RE — preset ref source-shape enforcement
+// ---------------------------------------------------------------------------
+
+describe("REF_RE", () => {
+  it("accepts local/name", () => {
+    assert.ok(REF_RE.test("local/block-rm-rf"));
+  });
+
+  it("accepts owner/repo/name", () => {
+    assert.ok(REF_RE.test("meffmadd/pi-assert-rules/protect-env"));
+  });
+
+  it("rejects a bare owner/name (always-dangling: source 'owner' isn't a section)", () => {
+    assert.ok(!REF_RE.test("meffmadd/pi-assert-rules"));
+  });
+
+  it("rejects local/a/b (always-dangling: source 'local/a')", () => {
+    assert.ok(!REF_RE.test("local/a/b"));
+  });
+
+  it("rejects a bare name (no slash)", () => {
+    assert.ok(!REF_RE.test("block-rm-rf"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validatePresetShape
+// ---------------------------------------------------------------------------
+
+describe("validatePresetShape", () => {
+  it("accepts a preset with description + preset refs", () => {
+    assert.ok(
+      validatePresetShape({
+        description: "Block destructive writes",
+        preset: ["local/block-rm-rf", "meffmadd/pi-assert-rules/protect-env"],
+      }),
+    );
+  });
+
+  it("accepts an empty preset array (n-created presets start at [])", () => {
+    assert.ok(validatePresetShape({ description: "d", preset: [] }));
+  });
+
+  it("accepts default: true/false", () => {
+    assert.ok(validatePresetShape({ description: "d", preset: [], default: true }));
+    assert.ok(validatePresetShape({ description: "d", preset: [], default: false }));
+  });
+
+  it("rejects entries missing description", () => {
+    assert.ok(!validatePresetShape({ preset: ["local/a"] }));
+  });
+
+  it("rejects entries missing preset", () => {
+    assert.ok(!validatePresetShape({ description: "d" }));
+  });
+
+  it("rejects a non-array preset", () => {
+    assert.ok(!validatePresetShape({ description: "d", preset: "local/a" }));
+  });
+
+  it("rejects a non-string preset ref", () => {
+    assert.ok(!validatePresetShape({ description: "d", preset: [123] }));
+  });
+
+  it("rejects a malformed ref (owner/name, 1 slash)", () => {
+    assert.ok(!validatePresetShape({ description: "d", preset: ["owner/repo"] }));
+  });
+
+  it("rejects a malformed ref (local/a/b, source 'local/a')", () => {
+    assert.ok(!validatePresetShape({ description: "d", preset: ["local/a/b"] }));
+  });
+
+  it("rejects a preset carrying shell (mutual exclusivity)", () => {
+    assert.ok(
+      !validatePresetShape({ description: "d", preset: [], shell: "false" }),
+    );
+  });
+
+  it("rejects a preset carrying hook (mutual exclusivity)", () => {
+    assert.ok(
+      !validatePresetShape({ description: "d", preset: [], hook: "tool_call" }),
+    );
+  });
+
+  it("rejects a preset carrying when (assert-only)", () => {
+    assert.ok(!validatePresetShape({ description: "d", preset: [], when: "true" }));
+  });
+
+  it("rejects a preset carrying filter (assert-only)", () => {
+    assert.ok(
+      !validatePresetShape({ description: "d", preset: [], filter: { toolName: "bash" } }),
+    );
+  });
+
+  it("rejects non-object entries", () => {
+    assert.ok(!validatePresetShape(null));
+    assert.ok(!validatePresetShape("string"));
+    assert.ok(!validatePresetShape(42));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateRuleEntry
+// ---------------------------------------------------------------------------
+
+describe("validateRuleEntry", () => {
+  it("classifies a preset as { kind: 'preset' }", () => {
+    assert.deepEqual(
+      validateRuleEntry({ description: "d", preset: ["local/a"] }),
+      { kind: "preset" },
+    );
+  });
+
+  it("classifies a shell assert as { kind: 'assert' }", () => {
+    assert.deepEqual(
+      validateRuleEntry({ description: "d", hook: "tool_call", shell: "false" }),
+      { kind: "assert" },
+    );
+  });
+
+  it("returns null for an entry matching neither shape", () => {
+    assert.equal(validateRuleEntry({ description: "d" }), null);
+    assert.equal(validateRuleEntry({ hook: "tool_call", shell: "false" }), null);
+    assert.equal(validateRuleEntry(null), null);
+  });
+
+  it("classifies a both-fields entry as assert (preset guard rejects shell-bearing entries)", () => {
+    // An entry with BOTH shell+hook and preset fails validatePresetShape (has
+    // shell → mutual-exclusivity reject), so it falls through to the assert
+    // guard, which accepts it (description/hook/shell present).  Such an entry
+    // is rejected by the schema's oneOf before it reaches disk; the tag here
+    // just reflects which guard matched.
+    assert.deepEqual(
+      validateRuleEntry({ description: "d", hook: "tool_call", shell: "false", preset: ["local/a"] }),
+      { kind: "assert" },
+    );
   });
 });

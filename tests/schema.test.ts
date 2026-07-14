@@ -421,6 +421,110 @@ describe("validate", () => {
       },
       expected: false,
     },
+
+    // ── Preset entries (oneOf assert | preset) ──────────────────────
+
+    {
+      label: "accepts a preset with description + preset refs",
+      config: {
+        local: {
+          "my-preset": {
+            description: "Block destructive writes",
+            preset: ["local/block-rm-rf", "meffmadd/pi-assert-rules/protect-env"],
+          },
+        },
+      },
+      expected: true,
+    },
+    {
+      label: "accepts a preset with an empty preset array",
+      config: {
+        local: { "my-preset": { description: "d", preset: [] } },
+      },
+      expected: true,
+    },
+    {
+      label: "accepts a preset with default: true",
+      config: {
+        local: { "my-preset": { description: "d", preset: ["local/a"], default: true } },
+      },
+      expected: true,
+    },
+    {
+      label: "rejects a preset missing description",
+      config: { local: { p: { preset: ["local/a"] } } },
+      expected: false,
+    },
+    {
+      label: "rejects a preset missing the preset array",
+      config: { local: { p: { description: "d" } } },
+      expected: false,
+    },
+    {
+      label: "rejects a preset carrying shell (mutual exclusivity)",
+      config: {
+        local: { p: { description: "d", preset: [], shell: "false" } },
+      },
+      expected: false,
+    },
+    {
+      label: "rejects a preset carrying hook (mutual exclusivity)",
+      config: {
+        local: { p: { description: "d", preset: [], hook: "tool_call" } },
+      },
+      expected: false,
+    },
+    {
+      label: "rejects a preset carrying when (assert-only)",
+      config: {
+        local: { p: { description: "d", preset: [], when: "true" } },
+      },
+      expected: false,
+    },
+    {
+      label: "rejects a preset carrying filter (assert-only)",
+      config: {
+        local: { p: { description: "d", preset: [], filter: { toolName: "bash" } } },
+      },
+      expected: false,
+    },
+    {
+      label: "rejects a preset with a non-array preset field",
+      config: {
+        local: { p: { description: "d", preset: "local/a" } },
+      },
+      expected: false,
+    },
+    {
+      label: "rejects a preset with a non-string ref",
+      config: {
+        local: { p: { description: "d", preset: [123] } },
+      },
+      expected: false,
+    },
+    {
+      label: "rejects a preset with an unknown property (additionalProperties: false)",
+      config: {
+        local: { p: { description: "d", preset: [], extraProp: "x" } },
+      },
+      expected: false,
+    },
+    {
+      label: "rejects an entry carrying both shell and preset (oneOf mutual exclusivity)",
+      config: {
+        local: {
+          p: { description: "d", hook: "tool_call", shell: "false", preset: ["local/a"] },
+        },
+      },
+      expected: false,
+    },
+    {
+      label: "accepts a preset in a repo section",
+      config: {
+        "some/repo": { p: { description: "d", preset: ["local/a"] } },
+      },
+      expected: true,
+    },
   ];
 
   for (const { label, config, expected } of cases) {

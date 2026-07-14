@@ -24,14 +24,31 @@ import { highlightSegments } from "./fuzzy.js";
 // aware implementation.  The detail-block helpers below build on those.
 
 /**
- * Render the `shell:` / `when:` detail block used by both the /asserts
- * panel and the install wizard's assert-entry picker.  `when` is only
- * shown when present, matching the standard assert view.
+ * Detail-block source for {@link renderAssertDetail}: either a shell assert
+ * (`shell`, optional `when`) or a preset (`preset` refs).  Both fields are
+ * optional so a `ShellAssert | PresetAssert` (the `Assert` union) is assignable
+ * directly; {@link renderAssertDetail} dispatches on `preset` first.
+ */
+export interface AssertDetailEntry {
+  shell?: string;
+  when?: string;
+  preset?: string[];
+}
+
+/**
+ * Render the `shell:` / `when:` (or `asserts:` for a preset) detail block used
+ * by both the /asserts panel and the install wizard's assert-entry picker.
+ * `when` is only shown when present, matching the standard assert view.
+ *
+ * Dispatches on `preset` first so the shell branch is only reached for a shell
+ * assert (whose `shell` is always present) — `detailLines(entry.shell, …)`
+ * never receives `undefined` at runtime.  A preset renders `asserts:` with its
+ * refs comma-joined, wrapped ANSI-aware so long ref lists carry across lines.
  */
 export function renderAssertDetail(
   theme: Theme,
   width: number,
-  entry: { shell: string; when?: string },
+  entry: AssertDetailEntry,
   /**
    * When set (search mode), matched subsequence chars in `shell`/`when` are
    * highlighted via `highlightSegments`; otherwise the values render muted.
@@ -69,7 +86,16 @@ export function renderAssertDetail(
     }
   };
 
-  detailLines(entry.shell, "shell: ");
+  // Dispatch on `preset` first: a preset renders `asserts:` with its refs
+  // comma-joined.  The shell branch is only reached for a shell assert, whose
+  // `shell` is always present — so `detailLines(entry.shell, …)` never
+  // receives `undefined` at runtime.  The `!== undefined` guard is the
+  // type-safe encoding of that invariant (no `!` needed).
+  if (entry.preset !== undefined) {
+    detailLines(entry.preset.join(", "), "asserts: ");
+    return lines;
+  }
+  if (entry.shell !== undefined) detailLines(entry.shell, "shell: ");
   if (entry.when) detailLines(entry.when, "when: ");
 
   return lines;
@@ -305,8 +331,8 @@ export async function selectDialog<T>(
     /** Hint segments as `[key, action]` pairs, rendered via `formatHint`. */
     hint?: [string, string][];
     maxVisible?: number;
-    /** Resolve the shell/when preview for a given item value. */
-    detailFor?: (value: string) => { shell: string; when?: string } | undefined;
+    /** Resolve the shell/when (or preset `asserts:`) preview for a given item value. */
+    detailFor?: (value: string) => AssertDetailEntry | undefined;
     /** Start the highlight at this index (clamped to the list). */
     initialIndex?: number;
     /** Leading per-item badge rendered before the label, outside the accent wrap. Return "" for no mark. */
@@ -533,8 +559,8 @@ export interface DetailListOptions<T> {
   showScrollIndicator?: boolean;
   /** Render the body of one row — everything after the `"> "` / `"  "` prefix. */
   renderRow: (item: T, selected: boolean, width: number) => string;
-  /** Resolve the shell/when preview for an item. `undefined` skips the detail. */
-  detailFor: (item: T) => { shell: string; when?: string } | undefined;
+  /** Resolve the shell/when (or preset `asserts:`) preview for an item. `undefined` skips the detail. */
+  detailFor: (item: T) => AssertDetailEntry | undefined;
   /**
    * Optional lines rendered above the shell/when detail block for the
    * focused row (e.g. the `/asserts` panel's "removed from source repo"
@@ -610,7 +636,7 @@ export class DetailList<T = SelectItem> implements Component {
     private maxVisible: number,
     private theme: Theme,
     private renderRow: (item: T, selected: boolean, width: number) => string,
-    private detailFor: (item: T) => { shell: string; when?: string } | undefined,
+    private detailFor: (item: T) => AssertDetailEntry | undefined,
   ) {}
 
   invalidate() {}

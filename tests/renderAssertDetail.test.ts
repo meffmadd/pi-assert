@@ -18,6 +18,47 @@ function mockTheme(): Theme {
   } as unknown as Theme;
 }
 
+describe("renderAssertDetail — preset branch", () => {
+  it("renders the asserts: label with comma-joined refs", () => {
+    const lines = renderAssertDetail(mockTheme(), 80, {
+      preset: ["local/foo", "owner/repo/bar"],
+    });
+    assert.ok(
+      lines.some((l) => l.includes("asserts:") && l.includes("local/foo") && l.includes("owner/repo/bar")),
+      "shows the asserts: label with both refs",
+    );
+  });
+
+  it("dispatches on preset first — no shell:/when: lines for a preset", () => {
+    const lines = renderAssertDetail(mockTheme(), 80, {
+      preset: ["local/foo"],
+    });
+    assert.ok(!lines.some((l) => l.includes("shell:")), "no shell: line");
+    assert.ok(!lines.some((l) => l.includes("when:")), "no when: line");
+  });
+
+  it("renders an empty preset array as asserts: (with nothing after)", () => {
+    const lines = renderAssertDetail(mockTheme(), 80, { preset: [] });
+    assert.ok(
+      lines.some((l) => l.includes("asserts:")),
+      "shows the asserts: label even for an empty preset",
+    );
+  });
+
+  it("wraps a long ref list across continuation lines", () => {
+    const refs = Array.from({ length: 8 }, (_, i) => `local/ref-${i}`);
+    const lines = renderAssertDetail(mockTheme(), 40, { preset: refs });
+    assert.ok(
+      lines.some((l) => l.includes("asserts:") && l.includes("ref-0")),
+      "first line shows the asserts: label and the first ref",
+    );
+    assert.ok(
+      lines.some((l) => !l.includes("asserts:") && l.includes("ref-7")),
+      "wrapped continuation line appears",
+    );
+  });
+});
+
 describe("renderAssertDetail", () => {
   it("renders the shell label and command", () => {
     const lines = renderAssertDetail(mockTheme(), 80, { shell: "echo hello" });

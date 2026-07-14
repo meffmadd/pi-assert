@@ -16,7 +16,7 @@ import {
   type RuleEntry,
   type RuleFile,
 } from "../installer.js";
-import type { Assert } from "../engine.js";
+import { isPreset, type ShellAssert } from "../engine.js";
 import {
   HINT_ENTER_CONFIRM,
   HINT_ENTER_INSTALL,
@@ -150,7 +150,7 @@ async function promptAssertEntry(
   ctx: ExtensionContext,
   file: RuleFile,
   entries: RuleEntries,
-  installedMap: Map<string, Assert>,
+  installedMap: Map<string, ShellAssert>,
   initialIndex?: number,
 ): Promise<SelectDialogResult<string>> {
   const fileName = file.path.replace(/^rules\//, "").replace(/\.json$/, "");
@@ -300,7 +300,7 @@ function updateAndReload(
   state: AssertsState,
   name: string,
   entry: RuleEntry,
-  installed: Assert,
+  installed: ShellAssert,
 ): void {
   // `installed.path` is set for repo-sourced asserts (the only kind the
   // wizard reaches this branch for).  Guard explicitly instead of asserting
@@ -365,9 +365,13 @@ export async function runInstallWizard(
     for (;;) {
       // Build the installed map from the freshly-loaded state (refreshed by
       // `reload` after each action) so badges/hints reflect the latest install.
-      const installedMap = new Map<string, Assert>();
+      // The wizard installs shell asserts only (presets arrive in M2), so a
+      // preset installed under the same name is ignored here — classifying it
+      // against a shell-assert repo entry would be meaningless, and `ShellAssert`
+      // is what `classifyEntry`'s `SignableEntry` param expects.
+      const installedMap = new Map<string, ShellAssert>();
       for (const a of state.asserts) {
-        if (a.source === repo) installedMap.set(a.name, a);
+        if (a.source === repo && !isPreset(a)) installedMap.set(a.name, a);
       }
 
       const result = await promptAssertEntry(

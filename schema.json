@@ -11,9 +11,9 @@
     },
     "local": {
       "type": "object",
-      "description": "User-defined asserts. Cannot be removed from the /asserts UI.",
+      "description": "User-defined asserts and presets. Cannot be removed from the /asserts UI.",
       "additionalProperties": {
-        "$ref": "#/$defs/assert"
+        "$ref": "#/$defs/entry"
       }
     },
     "repos": {
@@ -30,55 +30,102 @@
     "$ref": "#/$defs/repo"
   },
   "$defs": {
-    "assert": {
-      "type": "object",
-      "required": ["description", "hook", "shell"],
-      "properties": {
-        "description": {
-          "type": "string",
-          "description": "Human-readable description of what this assert guards. Required."
-        },
-        "hook": {
-          "type": "string",
-          "enum": ["tool_call", "tool_result", "agent_end"],
-          "description": "Pi event name to intercept. 'tool_call' fires before each tool executes; 'tool_result' fires after a tool runs (can patch the result); 'agent_end' fires when the agent finishes a prompt and goes idle."
-        },
-        "filter": {
+    "entry": {
+      "oneOf": [
+        {
+          "description": "A shell-based assert: `shell` (and optional `filter`/`when`) run on a hook.",
           "type": "object",
-          "description": "Key-value filter matched against { toolName, ...event.input }. If every key matches, the assert fires. Omitted → fires on every tool call. Each value may be a scalar (strict === match) or an array — an array means 'any of' its elements match the candidate value (e.g. { \"toolName\": [\"write\", \"edit\"] } runs on either). An empty array matches nothing.",
-          "additionalProperties": {
-            "anyOf": [
-              { "type": ["string", "number", "boolean", "null"] },
-              {
-                "type": "array",
-                "description": "Array of scalars; candidate value matches if it === any element (any-of).",
-                "items": { "type": ["string", "number", "boolean", "null"] },
-                "uniqueItems": false
+          "required": ["description", "hook", "shell"],
+          "properties": {
+            "description": {
+              "type": "string",
+              "description": "Human-readable description of what this assert guards. Required."
+            },
+            "hook": {
+              "type": "string",
+              "enum": ["tool_call", "tool_result", "agent_end"],
+              "description": "Pi event name to intercept. 'tool_call' fires before each tool executes; 'tool_result' fires after a tool runs (can patch the result); 'agent_end' fires when the agent finishes a prompt and goes idle."
+            },
+            "filter": {
+              "type": "object",
+              "description": "Key-value filter matched against { toolName, ...event.input }. If every key matches, the assert fires. Omitted → fires on every tool call. Each value may be a scalar (strict === match) or an array — an array means 'any of' its elements match the candidate value (e.g. { \"toolName\": [\"write\", \"edit\"] } runs on either). An empty array matches nothing.",
+              "additionalProperties": {
+                "anyOf": [
+                  { "type": ["string", "number", "boolean", "null"] },
+                  {
+                    "type": "array",
+                    "description": "Array of scalars; candidate value matches if it === any element (any-of).",
+                    "items": { "type": ["string", "number", "boolean", "null"] },
+                    "uniqueItems": false
+                  }
+                ]
               }
-            ]
-          }
+            },
+            "shell": {
+              "type": "string",
+              "description": "Shell command whose exit code decides pass/fail. Exit 0 → allow; non-zero → block (or trigger a new turn, for agent_end). Pipes, redirects, &&, || all work."
+            },
+            "when": {
+              "type": "string",
+              "description": "Optional precondition shell command. The main shell only runs when this exits 0. Use for dynamic runtime conditions (dirty git state, file existence, etc.) that filter cannot express."
+            },
+            "default": {
+              "type": "boolean",
+              "description": "If true, this assert is active by default for new sessions. Defaults to false.",
+              "default": false
+            },
+            "preset": {
+              "not": {},
+              "description": "Mutual exclusivity: a shell assert must not carry `preset` (use a preset entry instead)."
+            }
+          },
+          "additionalProperties": false
         },
-        "shell": {
-          "type": "string",
-          "description": "Shell command whose exit code decides pass/fail. Exit 0 → allow; non-zero → block (or trigger a new turn, for agent_end). Pipes, redirects, &&, || all work."
-        },
-        "when": {
-          "type": "string",
-          "description": "Optional precondition shell command. The main shell only runs when this exits 0. Use for dynamic runtime conditions (dirty git state, file existence, etc.) that filter cannot express."
-        },
-        "default": {
-          "type": "boolean",
-          "description": "If true, this assert is active by default for new sessions. Defaults to false.",
-          "default": false
+        {
+          "description": "A preset: a named bundle of `source/name` refs expanded by activeList(). Presets and shell asserts are mutually exclusive.",
+          "type": "object",
+          "required": ["description", "preset"],
+          "properties": {
+            "description": {
+              "type": "string",
+              "description": "Human-readable description of what this preset guards. Required."
+            },
+            "preset": {
+              "type": "array",
+              "description": "Qualified \"source/name\" refs (local/name or owner/repo/name) expanded to their shell asserts when the preset is active. Empty array is valid. Ref shape is enforced at write time by validatePresetShape (REF_RE).",
+              "items": { "type": "string" }
+            },
+            "default": {
+              "type": "boolean",
+              "description": "If true, this preset is active by default for new sessions (activating the preset, not its members' own defaults). Defaults to false.",
+              "default": false
+            },
+            "shell": {
+              "not": {},
+              "description": "Mutual exclusivity: a preset must not carry `shell`."
+            },
+            "hook": {
+              "not": {},
+              "description": "Mutual exclusivity: a preset must not carry `hook`."
+            },
+            "when": {
+              "not": {},
+              "description": "Mutual exclusivity: `when` is assert-only."
+            },
+            "filter": {
+              "not": {},
+              "description": "Mutual exclusivity: `filter` is assert-only."
+            }
+          },
+          "additionalProperties": false
         }
-      },
-      "additionalProperties": false
+      ]
     },
     "repo": {
       "type": "object",
       "description": "Asserts installed from a specific repository (keyed by owner/repo). Removable via the /asserts UI.",
       "additionalProperties": {
-        "$ref": "#/$defs/assert"
+        "$ref": "#/$defs/entry"
       }
     }
   }

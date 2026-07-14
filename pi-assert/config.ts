@@ -126,3 +126,82 @@ export function validateEntryShape(def: unknown): def is EntryFields {
   if (typeof d.hook !== "string" || typeof d.shell !== "string") return false;
   return true;
 }
+
+// ---------------------------------------------------------------------------
+// Preset entry-shape validation
+//
+// A preset is a named bundle of asserts: instead of `shell` + `when`, it holds
+// a `preset` array of qualified `"source/name"` refs.  Presets and asserts
+// are mutually exclusive (a preset carrying `shell`/`hook`/`when`/`filter`
+// is rejected), so `validateRuleEntry` is unambiguous.  Shared by the runtime
+// loader (`engine.ts`) and the installer (`installer.ts`).
+// ---------------------------------------------------------------------------
+
+/**
+ * Enforce the source *shape* of a preset ref, not just slash count:
+ * `local/name` (1 slash, source "local") or `owner/repo/name` (2 slashes).
+ * A bare `owner/name` is always-dangling (source "owner" isn't a section) and
+ * `local/a/b` is always-dangling (source "local/a"), so reject them at write
+ * time instead of installing them as inert `§` presets.
+ *
+ * The second alternative's `(?!local\/)` lookahead reserves `local` for the
+ * `local/name` form: without it, `local/a/b` would match the 3-segment branch
+ * (owner "local") and slip through, contradicting the always-dangling rule.
+ * `local` is a reserved section name, so no repo owner may be `local`.
+ */
+export const REF_RE =
+  /^local\/[A-Za-z0-9._-]+$|^(?!local\/)[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+
+/** Fields of a preset entry, on disk or in a rules repo. */
+export interface PresetFields {
+  description: string;
+  preset: string[];
+  default?: boolean;
+}
+
+/**
+ * Type guard for a preset entry's shape.
+ *
+ * Requires `description` (string) and `preset` (array of `REF_RE`-shaped
+ * strings).  An empty array is valid — `n`-created presets start at
+ * `preset: []`.  Mutual exclusivity with the assert shape is enforced by
+ * rejecting `shell`/`hook`/`when`/`filter`: a preset carrying any of those
+ * fails validation loudly instead of being silently dropped by `cleanEntry`'s
+ * preset branch (which writes only `description`/`preset`/`default`).
+ */
+export function validatePresetShape(def: unknown): def is PresetFields {
+  if (typeof def !== "object" || def === null) return false;
+  const d = def as Record<string, unknown>;
+  if (typeof d.description !== "string") return false;
+  // Empty array is valid: `n`-created presets start at preset: [].
+  if (!Array.isArray(d.preset) || !d.preset.every((x) => typeof x === "string")) {
+    return false;
+  }
+  if (!d.preset.every((x) => REF_RE.test(x))) return false; // enforce source/name
+  if (typeof d.shell === "string" || typeof d.hook === "string") return false; // mutual excl.
+  // `when`/`filter` are assert-only.  Reject them so a preset carrying either
+  // fails validation loudly instead of being silently dropped by `cleanEntry`'s
+  // preset branch (which writes only description/preset/default).
+  if (typeof d.when === "string" || d.filter !== undefined) return false;
+  return true;
+}
+
+/** Tag identifying which kind of rule entry `validateRuleEntry` matched. */
+export type RuleEntryKind = { kind: "assert" } | { kind: "preset" };
+
+/**
+ * Classify an unknown entry as an assert or a preset (or neither).
+ *
+ * Preset is checked first: the two shapes are mutually exclusive (a preset
+ * rejects `shell`/`hook`/`when`/`filter`, an assert lacks `preset`), so the
+ * order is unambiguous.  Returns `null` when the entry matches neither shape.
+ *
+ * Returns a *tag* (`RuleEntryKind | null`), not a type guard on `def`, so `def`
+ * stays `unknown` to the caller — the installer uses the tag to dispatch and
+ * re-validates with the individual guard where it needs `def` narrowed.
+ */
+export function validateRuleEntry(def: unknown): RuleEntryKind | null {
+  if (validatePresetShape(def)) return { kind: "preset" };
+  if (validateEntryShape(def)) return { kind: "assert" };
+  return null;
+}
