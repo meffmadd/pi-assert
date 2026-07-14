@@ -4,7 +4,7 @@ import {
   projectFilePath,
   readSectionedFile,
   writeSectionedFile,
-  validateEntryShape,
+  validateRuleEntry,
   type SectionedFile,
 } from "./config.js";
 
@@ -12,8 +12,8 @@ import {
 // Types
 // ---------------------------------------------------------------------------
 
-/** A single entry in a rules/*.json file from a pi-assert-rules repo. */
-export interface RuleEntry {
+/** A single assert entry in a rules/*.json file from a pi-assert-rules repo. */
+export interface RuleAssert {
   /** Human-readable description shown in the install TUI and persisted on install. */
   description: string;
   hook: string;
@@ -22,6 +22,17 @@ export interface RuleEntry {
   shell: string;
   default?: boolean;
 }
+
+/** A single preset entry in a rules/*.json file from a pi-assert-rules repo. */
+export interface RulePreset {
+  /** Human-readable description shown in the install TUI and persisted on install. */
+  description: string;
+  preset: string[];
+  default?: boolean;
+}
+
+/** A single entry in a rules/*.json file from a pi-assert-rules repo (assert or preset). */
+export type RuleEntry = RuleAssert | RulePreset;
 
 /** Top-level shape of a rules/*.json file. */
 export type RuleEntries = Record<string, RuleEntry>;
@@ -151,8 +162,11 @@ export async function fetchRuleFile(
 
   const entries: RuleEntries = {};
   for (const [name, def] of Object.entries(parsed as Record<string, unknown>)) {
-    if (validateEntryShape(def)) {
-      entries[name] = def;
+    const kind = validateRuleEntry(def);
+    if (kind?.kind === "assert") {
+      entries[name] = def as RuleAssert;
+    } else if (kind?.kind === "preset") {
+      entries[name] = def as RulePreset;
     }
   }
 
@@ -277,10 +291,12 @@ export function installRule(
 ): boolean {
   const current = readProjectFile(cwd);
 
-  // Ensure repo is in the repos array
-  if (!current.repos) current.repos = [];
-  if (!current.repos.includes(repo)) {
-    current.repos.push(repo);
+  // Ensure repo is in the repos array (skip for "local" — it's implicit)
+  if (repo !== "local") {
+    if (!current.repos) current.repos = [];
+    if (!current.repos.includes(repo)) {
+      current.repos.push(repo);
+    }
   }
 
   // Ensure the repo section exists
@@ -299,17 +315,28 @@ export function installRule(
 }
 
 /**
- * Build the canonical assert record written to disk: only schema-valid
- * fields, in a stable key order (`description`, `hook`, `shell`, then the
- * optional `filter`/`when`/`default` when present).
+ * Build the canonical record written to disk: only schema-valid fields.
  *
  * The single owner of the on-disk record shape — both `installRule` and
  * `updateRule` build on it so an install and an update produce byte-identical
  * output for the same entry (per the project's "prefer one shared
  * implementation" rule).  Omitted optional fields are dropped entirely,
  * matching the installer's "omit when absent" convention.
+ *
+ * Branches on the entry kind: assert → `{description, hook, shell, filter?,
+ * when?, default?}`; preset → `{description, preset, default?}`.
  */
 export function cleanEntry(entry: RuleEntry): Record<string, unknown> {
+  if ("preset" in entry) {
+    // Preset branch
+    const clean: Record<string, unknown> = {
+      description: entry.description,
+      preset: entry.preset,
+    };
+    if (entry.default !== undefined) clean.default = entry.default;
+    return clean;
+  }
+  // Assert branch
   const clean: Record<string, unknown> = {
     description: entry.description,
     hook: entry.hook,
@@ -330,7 +357,7 @@ export function cleanEntry(entry: RuleEntry): Record<string, unknown> {
  * {@link RuleEntry} (repo side) and the runtime `Assert` (installed side)
  * satisfy it, so the comparison functions stay decoupled from `engine.ts`.
  */
-export interface SignableEntry {
+export interface SignableAssert {
   description: string;
   hook: string;
   shell: string;
@@ -338,23 +365,44 @@ export interface SignableEntry {
   when?: string;
 }
 
+/** Minimal shape needed to compute a preset's content signature. */
+export interface SignablePreset {
+  description: string;
+  preset: string[];
+}
+
+/** Union type for content signature computation (assert or preset). */
+export type SignableEntry = SignableAssert | SignablePreset;
+
 /**
- * Canonical content signature of an assert, used for outdated detection.
+ * Canonical content signature of an entry, used for outdated detection.
  *
  * Excludes `default` (a local-only preference, never a repo-driven change)
- * and includes only the repo-driven fields: `description`, `hook`, `shell`,
- * and `filter`/`when` **when present**.  Omitted optional fields are dropped
- * entirely (never emitted as `undefined`) so a deep-equal of two signatures
- * treats "absent" on both sides as equal — an installed entry with no
- * `filter` is up to date with a repo entry that also has none.
+ * and includes only the repo-driven fields. For asserts: `description`,
+ * `hook`, `shell`, and `filter`/`when` **when present**. For presets:
+ * `description` and `preset` array.
+ *
+ * Omitted optional fields are dropped entirely (never emitted as `undefined`)
+ * so a deep-equal of two signatures treats "absent" on both sides as equal.
  *
  * Keys are emitted in a stable order so callers that want byte-stable output
  * (e.g. `JSON.stringify`) get it, though the comparison itself uses
  * key-order-independent `isDeepStrictEqual`.
+ *
+ * **`preset` array order is significant** — a repo reordering refs (semantically
+ * a no-op) flags "outdated"; matches on-disk order.
  */
 export function entryContentSignature(
   entry: SignableEntry,
 ): Record<string, unknown> {
+  if ("preset" in entry) {
+    // Preset branch
+    return {
+      description: entry.description,
+      preset: entry.preset,
+    };
+  }
+  // Assert branch
   const sig: Record<string, unknown> = {
     description: entry.description,
     hook: entry.hook,
@@ -367,11 +415,12 @@ export function entryContentSignature(
 
 /**
  * `true` when the installed entry's repo-driven content differs from the
- * repo entry (i.e. the installed assert is outdated).
+ * repo entry (i.e. the installed entry is outdated).
  *
  * Compares content signatures (which exclude `default`), so a `default`-only
  * difference is never an update.  Uses `isDeepStrictEqual` so filter objects
- * match regardless of key order.
+ * match regardless of key order. For presets, compares the `preset` array
+ * (order-sensitive).
  */
 export function entryNeedsUpdate(
   installed: SignableEntry,
@@ -387,7 +436,7 @@ export function entryNeedsUpdate(
 export type EntryState = "not-installed" | "outdated" | "installed";
 
 /**
- * Classify a repo entry against the installed assert of the same name.
+ * Classify a repo entry against the installed entry of the same name.
  *
  * - `undefined` installed → `"not-installed"` (name absent locally).
  * - installed, content differs → `"outdated"` (update available).
@@ -396,6 +445,8 @@ export type EntryState = "not-installed" | "outdated" | "installed";
  * `default` is excluded from the comparison (a local toggle is never an
  * update).  Pure: the caller resolves the installed entry by name and
  * passes it in, so this function knows nothing about files or maps.
+ *
+ * Works for both asserts and presets via the `SignableEntry` union.
  */
 export function classifyEntry(
   repoEntry: SignableEntry,
@@ -434,9 +485,9 @@ export function removeRule(
 }
 
 /**
- * Update an installed assert in place to match a repo entry's content.
+ * Update an installed entry in place to match a repo entry's content.
  *
- * Path-aware: writes to the file the assert was loaded from (`path`, which
+ * Path-aware: writes to the file the entry was loaded from (`path`, which
  * may be the project or the global file), so a project override isn't
  * silently rewritten into the global file (or vice versa).  This is the key
  * difference from {@link installRule}, which always writes the project file.
@@ -446,9 +497,11 @@ export function removeRule(
  * toggle.  The repo entry's own `default` (if any) is ignored in favour of
  * the installed value.
  *
- * Returns `true` when the assert was found and updated, `false` when the
+ * Returns `true` when the entry was found and updated, `false` when the
  * section or name is missing from the file (stale — the caller should treat
  * it as a fresh install instead).
+ *
+ * Works for both asserts and presets via `cleanEntry`'s branching.
  */
 export function updateRule(
   path: string,
@@ -473,14 +526,22 @@ export function updateRule(
   // entry's own `default`.  `cleanEntry` omits `default` when `undefined`,
   // so passing `true` only when the install actually had it keeps the
   // on-disk shape stable across an update.
-  section[name] = cleanEntry({
-    description: entry.description,
-    hook: entry.hook,
-    shell: entry.shell,
-    filter: entry.filter,
-    when: entry.when,
-    default: existingDefault === true ? true : undefined,
-  });
+  const updateEntry: RuleEntry = "preset" in entry
+    ? {
+        description: entry.description,
+        preset: entry.preset,
+        default: existingDefault === true ? true : undefined,
+      }
+    : {
+        description: entry.description,
+        hook: entry.hook,
+        shell: entry.shell,
+        filter: entry.filter,
+        when: entry.when,
+        default: existingDefault === true ? true : undefined,
+      };
+
+  section[name] = cleanEntry(updateEntry);
 
   writeSectionedFile(path, current);
   return true;

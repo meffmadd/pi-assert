@@ -16,7 +16,7 @@ import {
   type RuleEntry,
   type RuleFile,
 } from "../installer.js";
-import { isPreset, type ShellAssert } from "../engine.js";
+import { type ShellAssert, type PresetAssert } from "../engine.js";
 import {
   HINT_ENTER_CONFIRM,
   HINT_ENTER_INSTALL,
@@ -134,23 +134,23 @@ async function fetchAndPromptFile(
 
 /**
  * Entry picker for a single rule file.  Each entry is classified against the
- * installed asserts for this repo, and both the badge and the hintline reflect
+ * installed entries for this repo, and both the badge and the hintline reflect
  * the focused entry's next action:
  *
  * - not installed → (no badge), `Enter install`
  * - outdated       → `↑` badge, `Enter update`
  * - installed      → `✓` badge, `Enter uninstall` (with a `y/n` confirm)
  *
- * `Enter` is a unified tri-state; the `r` Remove binding is gone (Enter on an
- * installed assert uninstalls, so `r` is redundant).  The installed map is
- * caller-supplied (built from `state.asserts`, refreshed by `reload` after each
- * action) so marks/hints reflect the latest install state.
+ * Presets also show a `P` badge. `Enter` is a unified tri-state; the `r` Remove
+ * binding is gone (Enter on an installed entry uninstalls, so `r` is redundant).
+ * The installed map is caller-supplied (built from `state.asserts`, refreshed
+ * by `reload` after each action) so marks/hints reflect the latest install state.
  */
 async function promptAssertEntry(
   ctx: ExtensionContext,
   file: RuleFile,
   entries: RuleEntries,
-  installedMap: Map<string, ShellAssert>,
+  installedMap: Map<string, ShellAssert | PresetAssert>,
   initialIndex?: number,
 ): Promise<SelectDialogResult<string>> {
   const fileName = file.path.replace(/^rules\//, "").replace(/\.json$/, "");
@@ -169,10 +169,14 @@ async function promptAssertEntry(
     items,
     initialIndex,
     mark: (item) => {
+      const e = entries[item.value];
+      const isPresetEntry = e && "preset" in e;
       const st = stateFor(item.value);
-      if (st === "outdated") return theme.fg("warning", "↑ ");
-      if (st === "installed") return theme.fg("success", "✓ ");
-      return "";
+      let mark = "";
+      if (isPresetEntry) mark += theme.fg("accent", "P ");
+      if (st === "outdated") mark += theme.fg("warning", "↑ ");
+      if (st === "installed") mark += theme.fg("success", "✓ ");
+      return mark;
     },
     hintFor: (item) => {
       const st = stateFor(item.value);
@@ -193,12 +197,19 @@ async function promptAssertEntry(
     // "installed"` test.
     confirmOnSelect: {
       shouldConfirm: (item) => stateFor(item.value) === "installed",
-      title: "Uninstall assert",
-      message: (item) => `  Uninstall "${item.value}"?`,
+      title: "Uninstall",
+      message: (item) => {
+        const e = entries[item.value];
+        const kind = e && "preset" in e ? "preset" : "assert";
+        return `  Uninstall "${item.value}" ${kind}?`;
+      },
     },
     detailFor: (value) => {
       const e = entries[value];
       if (!e) return undefined;
+      if ("preset" in e) {
+        return { preset: e.preset };
+      }
       return { shell: e.shell, when: e.when };
     },
   });
@@ -240,6 +251,64 @@ function reload(ctx: ExtensionContext, state: AssertsState): void {
   state.updateStatus(ctx);
 }
 
+/**
+ * Install a preset's members (cascade). For each ref in the preset:
+ * - `local/*` → skip (local asserts aren't in a repo; missing = dangling §)
+ * - `owner/repo/*` → fetch the repo's entries and install the named member if not installed
+ *
+ * Dedup by `source\x00name`; a missing member is skipped (preset installs anyway, shows §).
+ */
+function installPresetMembers(
+  ctx: ExtensionContext,
+  state: AssertsState,
+  ref: string,
+): void {
+  const idx = ref.lastIndexOf("/");
+  if (idx < 0) return; // invalid ref, skip
+  const source = ref.slice(0, idx);
+  const memberName = ref.slice(idx + 1);
+
+  if (source === "local") {
+    // Local asserts aren't in a repo; skip (will show § if missing)
+    return;
+  }
+
+  // Check if already installed
+  const alreadyInstalled = state.asserts.some(
+    (a) => a.source === source && a.name === memberName,
+  );
+  if (alreadyInstalled) return;
+
+  // Fetch the repo's entries and install the member if found
+  (async () => {
+    try {
+      const repoEntries = await fetchRuleFiles(source);
+      // Find which file contains the member
+      for (const file of repoEntries) {
+        const entries = await fetchRuleFile(source, file.path);
+        if (memberName in entries) {
+          const memberEntry = entries[memberName]!;
+          installRule(ctx.cwd, source, memberName, memberEntry);
+          ctx.ui.notify(
+            `pi-assert: installed member "${memberName}" (via preset).`,
+            "info",
+          );
+          return;
+        }
+      }
+      ctx.ui.notify(
+        `pi-assert: member "${memberName}" not found in ${source}.`,
+        "warning",
+      );
+    } catch (err) {
+      ctx.ui.notify(
+        `pi-assert: failed to fetch member "${memberName}" — ${String(err)}`,
+        "error",
+      );
+    }
+  })();
+}
+
 function installAndReload(
   ctx: ExtensionContext,
   state: AssertsState,
@@ -257,6 +326,14 @@ function installAndReload(
     );
     return;
   }
+
+  // Cascade: if installing a preset, install its members
+  if ("preset" in entry) {
+    for (const ref of entry.preset) {
+      installPresetMembers(ctx, state, ref);
+    }
+  }
+
   reload(ctx, state);
   ctx.ui.notify(
     `pi-assert: installed "${name}". Use /asserts to enable it.`,
@@ -264,7 +341,7 @@ function installAndReload(
   );
   if (overwritten) {
     ctx.ui.notify(
-      `pi-assert: overwrote existing assert "${name}" in "${repo}".`,
+      `pi-assert: overwrote existing ${"preset" in entry ? "preset" : "assert"} "${name}" in "${repo}".`,
       "warning",
     );
   }
@@ -300,14 +377,14 @@ function updateAndReload(
   state: AssertsState,
   name: string,
   entry: RuleEntry,
-  installed: ShellAssert,
+  installed: ShellAssert | PresetAssert,
 ): void {
-  // `installed.path` is set for repo-sourced asserts (the only kind the
+  // `installed.path` is set for repo-sourced entries (the only kind the
   // wizard reaches this branch for).  Guard explicitly instead of asserting
-  // via `!` so a future caller with a local assert degrades gracefully.
+  // via `!` so a future caller with a local entry degrades gracefully.
   if (!installed.path) {
     ctx.ui.notify(
-      `pi-assert: cannot update "${name}" — assert has no owning file.`,
+      `pi-assert: cannot update "${name}" — entry has no owning file.`,
       "error",
     );
     return;
@@ -365,13 +442,10 @@ export async function runInstallWizard(
     for (;;) {
       // Build the installed map from the freshly-loaded state (refreshed by
       // `reload` after each action) so badges/hints reflect the latest install.
-      // The wizard installs shell asserts only (presets arrive in M2), so a
-      // preset installed under the same name is ignored here — classifying it
-      // against a shell-assert repo entry would be meaningless, and `ShellAssert`
-      // is what `classifyEntry`'s `SignableEntry` param expects.
-      const installedMap = new Map<string, ShellAssert>();
+      // Include both shell asserts and presets for classification.
+      const installedMap = new Map<string, ShellAssert | PresetAssert>();
       for (const a of state.asserts) {
-        if (a.source === repo && !isPreset(a)) installedMap.set(a.name, a);
+        if (a.source === repo) installedMap.set(a.name, a);
       }
 
       const result = await promptAssertEntry(
