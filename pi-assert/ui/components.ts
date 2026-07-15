@@ -124,6 +124,7 @@ export const HINT_T_TOGGLE_DEFAULT: [string, string] = ["t", "Toggle default"];
 export const HINT_D_DISABLE_ALL: [string, string] = ["d", "Disable all"];
 export const HINT_R_REMOVE: [string, string] = ["r", "Remove"];
 export const HINT_I_INSTALL_ASSERTS: [string, string] = ["i", "Install asserts"];
+export const HINT_N_NEW_PRESET: [string, string] = ["n", "New preset"];
 
 /** Format a single `[key, action]` segment (no indent/separator). */
 function formatHintItem(theme: Theme, item: [string, string]): string {

@@ -7,13 +7,20 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { isPreset, type Assert } from "../engine.js";
-import { fetchRepoEntries, removeRule, setAssertDefault } from "../installer.js";
+import {
+  fetchRepoEntries,
+  installRule,
+  removeRule,
+  setAssertDefault,
+} from "../installer.js";
 import {
   HINT_D_DISABLE_ALL,
   HINT_ENTER_ENABLE,
   HINT_ESC_CANCEL,
   HINT_ESC_EXIT_SEARCH,
+  HINT_ENTER_CONFIRM,
   HINT_I_INSTALL_ASSERTS,
+  HINT_N_NEW_PRESET,
   HINT_R_REMOVE,
   HINT_T_TOGGLE_DEFAULT,
   OverlayBox,
@@ -23,6 +30,7 @@ import {
   renderAssertDetail,
   renderDetailList,
   renderHintLine,
+  textInputDialog,
 } from "./components.js";
 import { filterSection, highlightSegments } from "./fuzzy.js";
 import type { AssertsState } from "./state.js";
@@ -36,21 +44,33 @@ interface Group {
   asserts: Assert[];
 }
 
-// Order: "local" first, then repos alphabetically.
+// Order: always-present **Presets** section first (header shown even when
+// empty, so `p`/`n` always have a home), then `local`, then repos alpha.
+// Presets are hoisted out of their real source into the synthetic Presets
+// group for display; write-back (`r`/`t`) uses `selected.source`/
+// `selected.path` (the preset's real section), not the group label.
+const PRESETS_SOURCE = "Presets";
 function groupBySource(asserts: Assert[]): Group[] {
+  const presets: Assert[] = [];
   const bySource = new Map<string, Assert[]>();
   for (const a of asserts) {
+    if (isPreset(a)) {
+      presets.push(a);
+      continue;
+    }
     const list = bySource.get(a.source) ?? [];
     list.push(a);
     bySource.set(a.source, list);
   }
-  return Array.from(bySource.keys())
-    .sort((a, b) => {
-      if (a === "local") return -1;
-      if (b === "local") return 1;
-      return a.localeCompare(b);
-    })
-    .map((source) => ({ source, asserts: bySource.get(source)! }));
+  const groups: Group[] = [{ source: PRESETS_SOURCE, asserts: presets }];
+  for (const source of Array.from(bySource.keys()).sort((a, b) => {
+    if (a === "local") return -1;
+    if (b === "local") return 1;
+    return a.localeCompare(b);
+  })) {
+    groups.push({ source, asserts: bySource.get(source)! });
+  }
+  return groups;
 }
 
 // ---------------------------------------------------------------------------
@@ -91,7 +111,7 @@ function buildPresetCoverage(
 // ---------------------------------------------------------------------------
 // AssertsPanel — model + render + input for the /asserts toggle UI.
 // ---------------------------------------------------------------------------
-type PanelAction = "cancel" | "install" | "reload";
+type PanelAction = "cancel" | "install" | "reload" | "create-preset";
 
 export class AssertsPanel {
   groups: Group[];
@@ -135,13 +155,60 @@ export class AssertsPanel {
     return this._coverage;
   }
 
+  /**
+   * Reverse lookup for dangling-ref detection: `"source/name"` → the installed
+   * shell assert at that ref (presets excluded — a ref to a preset is a
+   * nested-preset ref, always dangling for v1).  Lazy-computed once: the
+   * panel is recreated after every reload (install/remove/create), and within
+   * a panel instance `state.asserts` (which asserts exist) never changes —
+   * only `active` and `default` flags do — so the map is stable for the
+   * panel's lifetime.  Synchronous, unlike the async orphaned fetch.
+   */
+  private _byRef: Map<string, Assert> | null = null;
+  private get byRef(): Map<string, Assert> {
+    if (this._byRef === null) {
+      this._byRef = new Map(
+        this.state.asserts
+          .filter((a) => !isPreset(a))
+          .map((a) => [`${a.source}/${a.name}`, a]),
+      );
+    }
+    return this._byRef;
+  }
+
+  /**
+   * The refs of preset `a` that don't resolve to an installed shell assert.
+   * Empty for non-presets and for presets whose every ref resolves.  A preset
+   * is `§` (dangling) iff this is non-empty.  Refs split on the last `/`
+   * (matches `activeList()`), but the lookup key is the full `"source/name"`
+   * ref string, so a malformed ref (no `/`) simply won't be in the map.
+   */
+  private danglingRefs(a: Assert): string[] {
+    if (!isPreset(a)) return [];
+    const out: string[] = [];
+    for (const ref of a.preset) {
+      if (!this.byRef.has(ref)) out.push(ref);
+    }
+    return out;
+  }
+
+  /** `true` iff `a` is a preset with at least one dangling ref (`§` badge). */
+  private isDangling(a: Assert): boolean {
+    return this.danglingRefs(a).length > 0;
+  }
+
+  /** `true` iff `a` was removed from its source repo (`⚠` badge, async). */
+  private isOrphaned(a: Assert): boolean {
+    return this.orphaned.has(`${a.source}\0${a.name}`);
+  }
+
   /** Re-render trigger, set by the caller so async fetch resolution can flip badges in. */
   private requestRender: () => void = () => {};
 
   // ── Search lifecycle ───────────────────────────────────────────────
   /** Enter fuzzy-search mode. No-op when there's nothing to search. */
   private enterSearch(): void {
-    if (this.state.broken || this.groups.length === 0) return;
+    if (this.state.broken || this.state.asserts.length === 0) return;
     this.searchActive = true;
     this.query = "";
     this.savedGroups = this.groups;
@@ -230,6 +297,11 @@ export class AssertsPanel {
     this.nav = new SectionNavigator<Assert>(
       this.groups.map((g) => ({ items: g.asserts })),
     );
+    // Open on the first non-empty section so the user lands on a real row.
+    // The Presets section is always first but may be empty; falling back to
+    // it (index 0) when every section is empty keeps `p`/`n` reachable.
+    const firstNonEmpty = this.groups.findIndex((g) => g.asserts.length > 0);
+    if (firstNonEmpty >= 0) this.nav.focus = firstNonEmpty;
   }
 
   /** Wire the TUI re-render trigger (called inside `ctx.ui.custom`). */
@@ -313,14 +385,18 @@ export class AssertsPanel {
       ];
     }
 
-    if (this.groups.length === 0) {
+    if (this.state.asserts.length === 0) {
+      // No asserts at all (fresh install or broken config).  The Presets
+      // section is still rendered (header shown even when empty — the home
+      // for `p`/`n`) so the user has somewhere to land; the message guides them.
       return [
         ...this.renderHeaderLines(),
+        this.renderSectionHeader(0),
         this.theme.fg(
           "dim",
-          "No asserts defined! Prompt your agent or press " +
-            this.theme.fg("accent", "i") +
-            " to install.",
+          "No asserts defined! Press " +
+            this.theme.fg("accent", "i") + " to install or " +
+            this.theme.fg("accent", "n") + " for a new preset.",
         ),
       ];
     }
@@ -561,13 +637,18 @@ export class AssertsPanel {
   }
 
   /**
-   * The Tab/Shift+Tab cycle keys that land on `index`, so the section
-   * header advertises the jump in place instead of as a separate hint-line
-   * item.  Empty for the focused section (already there) and for sections
-   * that aren't a direct cycle target.  With wrap, the first/last section
-   * is reachable from the opposite end, so it carries the key too.
+   * The jump keys that land on `index`, so the section header advertises the
+   * jump in place instead of as a separate hint-line item.  The Presets
+   * section has a dedicated `p` key — always shown (even when focused) so
+   * the jump target is discoverable from any section.  Other sections show
+   * the Tab/Shift+Tab cycle keys: empty for the focused section (already
+   * there) and for sections that aren't a direct cycle target.  With wrap,
+   * the first/last section is reachable from the opposite end, so it carries
+   * the key too.
    */
   private sectionNavKeys(index: number): string[] {
+    // Presets has a dedicated `p` jump, advertised on its own header.
+    if (this.groups[index].source === PRESETS_SOURCE) return ["p"];
     const n = this.groups.length;
     if (n < 2) return [];
     const focused = this.nav.focusedSection;
@@ -590,24 +671,13 @@ export class AssertsPanel {
   ): string[] {
     if (!focused) {
       // Dimmed static listing.
-      const orphaned = this.orphaned;
-      const orphanW = visibleWidth(this.theme.fg("warning", "⚠ "));
-      const isOrphaned = (a: Assert) =>
-        orphaned.has(`${a.source}\0${a.name}`);
-      const maxLabelWidth = Math.max(
-        ...group.asserts.map(
-          (a) => this.plainLabel(a).length + (isOrphaned(a) ? orphanW : 0),
-        ),
-      );
+      const { badgeFor, badgeWidth, maxLabelWidth } = this.badgeLayout(group);
       const lines: string[] = [];
       const muted = (s: string) => this.theme.fg("muted", s);
       const accent = (s: string) => this.theme.fg("accent", s);
       for (const a of group.asserts) {
-        const badge = isOrphaned(a)
-          ? this.theme.fg("warning", "⚠ ")
-          : "";
-        const labelW =
-          this.plainLabel(a).length + (isOrphaned(a) ? orphanW : 0);
+        const badge = badgeFor(a);
+        const labelW = this.plainLabel(a).length + badgeWidth(a);
         const padding = " ".repeat(Math.max(0, maxLabelWidth - labelW));
         const status = this.renderStatus(a);
         lines.push(
@@ -618,26 +688,20 @@ export class AssertsPanel {
     }
 
     // Active section: delegate to the shared renderDetailList so the row
-    // layout, "> " highlight prefix, and inline shell/when detail block are
-    // identical to the install wizard's assert-entry picker.  We pass our
-    // own [start, end) window (the panel manages per-section scrolling and
-    // renders its own scroll indicator outside the section).
+    // layout, "> " highlight prefix, and inline shell/when (or asserts:)
+    // detail block are identical to the install wizard's assert-entry
+    // picker.  We pass our own [start, end) window (the panel manages
+    // per-section scrolling and renders its own scroll indicator outside
+    // the section).
     //
-    // Orphaned asserts (removed upstream) get a `⚠` badge rendered OUTSIDE
-    // the accent wrap so it keeps its warning colour on the selected row;
-    // the badge width is reserved in `maxLabelWidth` so the status column
-    // stays aligned across marked and unmarked rows.
+    // Badges render OUTSIDE the accent wrap so their colours hold on the
+    // selected row.  Left-to-right: `P ` (preset, accent), `§ ` (dangling,
+    // warning), `⚠ ` (orphaned, warning).  `§`+`⚠` co-occur; `P` is always
+    // on presets.  The width of every present badge is reserved in
+    // `maxLabelWidth` so the status column stays aligned across mixed badge
+    // sets (a `P § ⚠` preset and a bare `⚠` assert line up).
     const theme = this.theme;
-    const orphaned = this.orphaned;
-    const isOrphaned = (a: Assert) => orphaned.has(`${a.source}\0${a.name}`);
-    const orphanBadge = (a: Assert) =>
-      isOrphaned(a) ? theme.fg("warning", "⚠ ") : "";
-    const orphanW = visibleWidth(theme.fg("warning", "⚠ "));
-    const maxLabelWidth = Math.max(
-      ...group.asserts.map(
-        (a) => this.plainLabel(a).length + (isOrphaned(a) ? orphanW : 0),
-      ),
-    );
+    const { badgeFor, badgeWidth, maxLabelWidth } = this.badgeLayout(group);
 
     return renderDetailList(theme, width, {
       items: group.asserts,
@@ -646,9 +710,8 @@ export class AssertsPanel {
       showScrollIndicator: false,
       highlightQuery: this.searchActive ? this.query : undefined,
       renderRow: (a, selected) => {
-        const badge = orphanBadge(a);
-        const labelW =
-          this.plainLabel(a).length + (isOrphaned(a) ? orphanW : 0);
+        const badge = badgeFor(a);
+        const labelW = this.plainLabel(a).length + badgeWidth(a);
         const padding = " ".repeat(Math.max(0, maxLabelWidth - labelW));
         const base = selected
           ? (s: string) => theme.fg("accent", s)
@@ -662,8 +725,48 @@ export class AssertsPanel {
       },
       detailFor: (a) =>
         isPreset(a) ? { preset: a.preset } : { shell: a.shell, when: a.when },
-      detailPrefix: (a) => this.orphanedDetailLines(a),
+      detailPrefix: (a) => [
+        ...this.orphanedDetailLines(a),
+        ...this.danglingDetailLines(a),
+      ],
     });
+  }
+
+  /**
+   * Per-render badge geometry for one section: the styled badge string, its
+   * visible width, and the section-wide `maxLabelWidth` (label + badges) so
+   * the status column aligns across mixed badge sets.  The three badge
+   * strings are built once and their widths cached — `visibleWidth` would
+   * otherwise re-measure the ANSI-wrapped string per row.
+   */
+  private badgeLayout(group: Group): {
+    badgeFor: (a: Assert) => string;
+    badgeWidth: (a: Assert) => number;
+    maxLabelWidth: number;
+  } {
+    const theme = this.theme;
+    const P_BADGE = theme.fg("accent", "P ");
+    const DANGLE_BADGE = theme.fg("warning", "§ ");
+    const ORPHAN_BADGE = theme.fg("warning", "⚠ ");
+    const P_W = visibleWidth(P_BADGE);
+    const DANGLE_W = visibleWidth(DANGLE_BADGE);
+    const ORPHAN_W = visibleWidth(ORPHAN_BADGE);
+    const badgeFor = (a: Assert): string => {
+      let b = "";
+      if (isPreset(a)) b += P_BADGE;
+      if (this.isDangling(a)) b += DANGLE_BADGE;
+      if (this.isOrphaned(a)) b += ORPHAN_BADGE;
+      return b;
+    };
+    const badgeWidth = (a: Assert): number =>
+      (isPreset(a) ? P_W : 0) +
+      (this.isDangling(a) ? DANGLE_W : 0) +
+      (this.isOrphaned(a) ? ORPHAN_W : 0);
+    const maxLabelWidth = Math.max(
+      0,
+      ...group.asserts.map((a) => this.plainLabel(a).length + badgeWidth(a)),
+    );
+    return { badgeFor, badgeWidth, maxLabelWidth };
   }
 
   /**
@@ -673,11 +776,28 @@ export class AssertsPanel {
    * unchanged.
    */
   private orphanedDetailLines(a: Assert): string[] {
-    if (!this.orphaned.has(`${a.source}\0${a.name}`)) return [];
+    if (!this.isOrphaned(a)) return [];
     return [
       "    " +
         this.theme.fg("warning", "⚠ ") +
         this.theme.fg("dim", "removed from source repo — press r to uninstall"),
+    ];
+  }
+
+  /**
+   * Contextual warning line shown in the detail block under a focused preset
+   * with one or more dangling refs (`§` badge) — lists the refs that don't
+   * resolve to an installed shell assert.  Returns `[]` for non-presets and
+   * for presets whose every ref resolves, so the detail block is unchanged.
+   */
+  private danglingDetailLines(a: Assert): string[] {
+    const refs = this.danglingRefs(a);
+    if (refs.length === 0) return [];
+    const label = refs.length === 1 ? "dangling ref" : "dangling refs";
+    return [
+      "    " +
+        this.theme.fg("warning", "§ ") +
+        this.theme.fg("dim", `${label}: ${refs.join(", ")}`),
     ];
   }
 
@@ -732,6 +852,7 @@ export class AssertsPanel {
     }
     items.push(HINT_R_REMOVE);
     items.push(HINT_I_INSTALL_ASSERTS);
+    items.push(HINT_N_NEW_PRESET);
     items.push(HINT_ESC_CANCEL);
     return renderHintLine(this.theme, width, items);
   }
@@ -795,6 +916,18 @@ export class AssertsPanel {
     // ── Global hotkeys ──
     if (matchesKey(data, "/")) { this.enterSearch(); return undefined; }
     if (matchesKey(data, "i")) return "install";
+    // `n` opens the new-preset dialog (handled by the command loop).  In
+    // confirm mode `n` cancels (confirm is checked first); in search `n`
+    // feeds the query (search is checked first) — so this branch is only
+    // reached in normal mode.
+    if (matchesKey(data, "n")) return "create-preset";
+    // `p` jumps to the always-first Presets section (row 0, or the header
+    // when empty).  Presets is always index 0 (see `groupBySource`).
+    if (matchesKey(data, "p")) {
+      this.nav.focus = 0;
+      this.nav.selection[0] = 0;
+      return undefined;
+    }
     if (matchesKey(data, Key.escape)) return "cancel";
 
     const focused = this.groups[this.nav.focusedSection];
@@ -811,10 +944,15 @@ export class AssertsPanel {
     }
 
     // ── r: remove selected assert ──
+    // Write-back uses `selected.source`/`selected.path`, not `focused.source`:
+    // the Presets group is synthetic (label "Presets"), so `focused.source` is
+    // the group label, not the preset's real section.  This is a one-time M3
+    // switch that applies to all entry types (hoisting makes `focused.source`
+    // wrong in general).
     if (matchesKey(data, "r")) {
       const selected = focused.asserts[this.nav.focusedIndex];
       if (selected) {
-        this.confirm = { name: selected.name, source: focused.source };
+        this.confirm = { name: selected.name, source: selected.source };
       }
       return undefined;
     }
@@ -834,7 +972,7 @@ export class AssertsPanel {
 
       try {
         const next = !selected.default;
-        setAssertDefault(selected.path, focused.source, selected.name, next);
+        setAssertDefault(selected.path, selected.source, selected.name, next);
 
         // Mirror the new value to the in-memory `Assert` so the next render
         // shows the (default) tag.  The panel's `group.asserts` array shares
@@ -843,7 +981,7 @@ export class AssertsPanel {
         // both views.  Reloading here would create new objects and break
         // that link.
         const live = this.state.asserts.find(
-          (a) => a.source === focused.source && a.name === selected.name,
+          (a) => a.source === selected.source && a.name === selected.name,
         );
         if (live) live.default = next;
       } catch (err) {
@@ -901,6 +1039,48 @@ export class AssertsPanel {
     this.state.persist();
     this.state.updateStatus(ctx);
   }
+}
+
+// ---------------------------------------------------------------------------
+// createLocalPreset — `n` new local preset.  Prompts for a name, warns (does
+// not silently overwrite) if the name already exists in the local section,
+// then installs an empty preset and lets the command loop reload.  `default`
+// is dropped (passed as `undefined` so `cleanEntry` omits it, matching
+// "omit when false" / `setAssertDefault` deleting the key).
+// ---------------------------------------------------------------------------
+export async function createLocalPreset(
+  ctx: ExtensionContext,
+  state: AssertsState,
+): Promise<void> {
+  const name = await textInputDialog(ctx, {
+    title: "New preset",
+    label: "Preset name:",
+    hint: [HINT_ENTER_CONFIRM, HINT_ESC_CANCEL],
+  });
+  if (!name) return; // cancelled
+
+  // Warn (don't silently overwrite) if the name already exists locally —
+  // mirrors `installRule`'s `overwritten` return, but for a *create* we abort
+  // rather than clobber so the user removes the existing entry first.
+  if (state.asserts.some((a) => a.source === "local" && a.name === name)) {
+    ctx.ui.notify(
+      `pi-assert: "${name}" already exists locally — remove it first.`,
+      "warning",
+    );
+    return;
+  }
+
+  try {
+    installRule(ctx.cwd, "local", name, {
+      description: "",
+      preset: [],
+      default: undefined,
+    });
+  } catch (err) {
+    ctx.ui.notify(`pi-assert: failed to create preset — ${String(err)}`, "error");
+    return;
+  }
+  ctx.ui.notify(`pi-assert: created preset "${name}".`, "info");
 }
 
 // ---------------------------------------------------------------------------
@@ -969,6 +1149,10 @@ export function registerAssertsCommand(
 
         if (action === "install") {
           await runInstallWizard(ctx, state);
+          continue;
+        }
+        if (action === "create-preset") {
+          await createLocalPreset(ctx, state);
           continue;
         }
         if (action === "reload") {

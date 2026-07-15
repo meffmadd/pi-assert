@@ -89,6 +89,20 @@ function plain(s: string): string {
   return s.replace(/[\[\]]/g, "");
 }
 
+/**
+ * Find the rendered row for `name` (not a detail line like `asserts:`/`shell:`).
+ * A row carries a status keyword (active/enabled/disabled); a detail line
+ * (e.g. the preset's `asserts: local/guard`) does not.  Needed since M3: the
+ * Presets section renders first, so a preset's `asserts:` detail mentioning a
+ * member name can appear before the member's own row.
+ */
+function rowFor(lines: string[], name: string): string | undefined {
+  return lines.find((l) => {
+    const p = plain(l);
+    return p.includes(name) && /active|enabled|disabled/.test(p);
+  });
+}
+
 // ── Tests ─────────────────────────────────────────────────────────
 
 describe("AssertsPanel", () => {
@@ -159,7 +173,10 @@ describe("AssertsPanel", () => {
       Array.from({ length: 8 }, (_, i) => makeAssert(`a-${i}`)),
     );
 
-    const lines = panel.render(80, 12);
+    // terminalHeight 14 (not 12): the always-present Presets header above
+    // `local` reserves 2 extra lines (header + separator), so the windowed
+    // section needs a touch more height to show 3 rows.
+    const lines = panel.render(80, 14);
     const activeHeader = lines.find((l) => l.includes("[Local]"));
 
     assert.ok(activeHeader, "active section header is shown");
@@ -549,11 +566,12 @@ describe("AssertsPanel section cycling (Tab/Shift+Tab)", () => {
       makeAssert("aaa-1", "repo/aaa"),
       makeAssert("zzz-1", "repo/zzz"),
     ]);
-    // local → repo/aaa → repo/zzz → local (wrap)
-    panel.nav.cycleSection("next");
-    assert.equal(panel.nav.focusedSection, 1);
+    // Sections: Presets(0, empty), local(1), repo/aaa(2), repo/zzz(3).
+    // Initial focus is local(1) (first non-empty). local → repo/aaa → repo/zzz → Presets (wrap).
     panel.nav.cycleSection("next");
     assert.equal(panel.nav.focusedSection, 2);
+    panel.nav.cycleSection("next");
+    assert.equal(panel.nav.focusedSection, 3);
     panel.nav.cycleSection("next");
     assert.equal(panel.nav.focusedSection, 0, "wraps last→first");
   });
@@ -564,10 +582,12 @@ describe("AssertsPanel section cycling (Tab/Shift+Tab)", () => {
       makeAssert("aaa-1", "repo/aaa"),
       makeAssert("zzz-1", "repo/zzz"),
     ]);
+    // Start on Presets (the first section, index 0) to test prev-wrap to last.
+    panel.nav.focus = 0;
     panel.nav.cycleSection("prev");
-    assert.equal(panel.nav.focusedSection, 2, "wraps first→last");
+    assert.equal(panel.nav.focusedSection, 3, "wraps first→last"); // repo/zzz
     panel.nav.cycleSection("prev");
-    assert.equal(panel.nav.focusedSection, 1);
+    assert.equal(panel.nav.focusedSection, 2); // repo/aaa
   });
 
   it("cycleSection preserves each section's remembered row", () => {
@@ -585,18 +605,17 @@ describe("AssertsPanel section cycling (Tab/Shift+Tab)", () => {
 
     // Tab to repo/aaa (fresh section, remembers its own row 0), then back.
     panel.nav.cycleSection("next");
-    assert.equal(panel.nav.focusedSection, 1);
+    assert.equal(panel.nav.focusedSection, 2);
     assert.equal(panel.nav.focusedIndex, 0, "repo section starts at its row 0");
     panel.nav.cycleSection("prev");
-    assert.equal(panel.nav.focusedSection, 0);
+    assert.equal(panel.nav.focusedSection, 1);
     assert.equal(panel.nav.focusedIndex, 1, "local row restored after round-trip");
   });
 
   it("cycleSection is a no-op with a single section", () => {
-    const panel = makePanel([
-      makeAssert("only-1"),
-      makeAssert("only-2"),
-    ]);
+    // A preset-only panel has exactly one section (Presets); shell-only
+    // panels always have Presets + local (two) since M3 hoisted presets.
+    const panel = makePanel([makePreset("only-preset", [])]);
     const moved = panel.nav.cycleSection("next");
     assert.equal(moved, false);
     assert.equal(panel.nav.focusedSection, 0, "focus unchanged");
@@ -609,7 +628,7 @@ describe("AssertsPanel section cycling (Tab/Shift+Tab)", () => {
       makeAssert("zzz-1", "repo/zzz"),
     ]);
     panel.handleInput("\t", makeCtx());
-    assert.equal(panel.nav.focusedSection, 1, "Tab advances to next section");
+    assert.equal(panel.nav.focusedSection, 2, "Tab advances to next section");
   });
 
   it("Shift+Tab (\x1b[Z) moves focus to the previous section", () => {
@@ -620,17 +639,15 @@ describe("AssertsPanel section cycling (Tab/Shift+Tab)", () => {
     ]);
     // Move to the middle section first.
     panel.nav.cycleSection("next");
-    assert.equal(panel.nav.focusedSection, 1);
+    assert.equal(panel.nav.focusedSection, 2);
     // Shift+Tab via its real escape sequence.
     panel.handleInput("\x1b[Z", makeCtx());
-    assert.equal(panel.nav.focusedSection, 0, "Shift+Tab returns to previous section");
+    assert.equal(panel.nav.focusedSection, 1, "Shift+Tab returns to previous section");
   });
 
   it("Tab is a no-op with a single section", () => {
-    const panel = makePanel([
-      makeAssert("only-1"),
-      makeAssert("only-2"),
-    ]);
+    // Preset-only → one section (Presets); Tab is a no-op.
+    const panel = makePanel([makePreset("only-preset", [])]);
     panel.handleInput("\t", makeCtx());
     assert.equal(panel.nav.focusedSection, 0, "focus stays on the only section");
   });
@@ -665,10 +682,7 @@ describe("AssertsPanel section cycling (Tab/Shift+Tab)", () => {
     const multiHint = multi.render(80, 20).find((l) => l.includes("Tab"));
     assert.ok(multiHint, "Tab hint shown with multiple sections");
 
-    const single = makePanel([
-      makeAssert("only-1"),
-      makeAssert("only-2"),
-    ]);
+    const single = makePanel([makePreset("only-preset", [])]);
     const singleHint = single.render(80, 20).find((l) => l.includes("Tab"));
     assert.ok(!singleHint, "Tab hint hidden with a single section");
   });
@@ -1156,7 +1170,7 @@ describe("AssertsPanel fuzzy search", () => {
 
     panel.handleInput("\x1b", makeCtx()); // Esc → exit
     assert.ok(!panel.isSearchActive);
-    assert.equal(panel.nav.focusedSection, 0, "back on the local section");
+    assert.equal(panel.nav.focusedSection, 1, "back on the local section");
     assert.equal(panel.nav.focusedIndex, 1, "focus restored to no-env's row in the unfiltered view");
   });
 
@@ -1438,7 +1452,7 @@ describe("AssertsPanel preset coverage status", () => {
       new Set(["safety"]),
     );
     const lines = panel.render(80);
-    const guardLine = lines.find((l) => plain(l).includes("guard"));
+    const guardLine = rowFor(lines, "guard");
     assert.ok(guardLine, "guard row is rendered");
     // `guard` is not individually active, but `safety` (active) references it.
     assert.ok(
@@ -1463,7 +1477,7 @@ describe("AssertsPanel preset coverage status", () => {
     // Focus the repo section so the local section is non-focused (dimmed).
     panel.nav.cycleSection("next");
     const lines = panel.render(80);
-    const guardLine = lines.find((l) => l.includes("guard"));
+    const guardLine = rowFor(lines, "guard");
     assert.ok(guardLine, "guard row is rendered in the non-focused section");
     assert.ok(
       plain(guardLine!).includes("active") && guardLine!.includes("[via safety]"),
@@ -1477,7 +1491,7 @@ describe("AssertsPanel preset coverage status", () => {
       new Set(["guard", "safety"]),
     );
     const lines = panel.render(80);
-    const guardLine = lines.find((l) => plain(l).includes("guard"));
+    const guardLine = rowFor(lines, "guard");
     assert.ok(guardLine, "guard row is rendered");
     assert.ok(
       plain(guardLine!).includes("enabled"),
@@ -1495,7 +1509,7 @@ describe("AssertsPanel preset coverage status", () => {
       new Set(), // nothing active
     );
     const lines = panel.render(80);
-    const guardLine = lines.find((l) => plain(l).includes("guard"));
+    const guardLine = rowFor(lines, "guard");
     assert.ok(guardLine, "guard row is rendered");
     assert.ok(
       plain(guardLine!).includes("disabled"),
@@ -1517,7 +1531,7 @@ describe("AssertsPanel preset coverage status", () => {
       new Set(["p1", "p2"]),
     );
     const lines = panel.render(80);
-    const guardLine = lines.find((l) => plain(l).includes("guard"));
+    const guardLine = rowFor(lines, "guard");
     assert.ok(guardLine, "guard row is rendered");
     assert.ok(
       guardLine!.includes("[via 2 presets]"),
@@ -1541,7 +1555,7 @@ describe("AssertsPanel preset coverage status", () => {
 
     // Initially: guard shows 'active · via safety'.
     let lines = panel.render(80);
-    let guardLine = lines.find((l) => plain(l).includes("guard"));
+    let guardLine = rowFor(lines, "guard");
     assert.ok(guardLine!.includes("[via safety]"), "initially covered by safety");
 
     // Focus the preset (2nd row) and toggle it off.
@@ -1552,7 +1566,7 @@ describe("AssertsPanel preset coverage status", () => {
     // After toggle: guard shows 'disabled' (no active preset covers it).
     panel.nav.moveWithin("up"); // focus back to guard
     lines = panel.render(80);
-    guardLine = lines.find((l) => plain(l).includes("guard"));
+    guardLine = rowFor(lines, "guard");
     assert.ok(
       plain(guardLine!).includes("disabled"),
       "guard reverts to 'disabled' after the covering preset is toggled off",
@@ -1561,3 +1575,494 @@ describe("AssertsPanel preset coverage status", () => {
   });
 });
 
+
+// ═══════════════════════════════════════════════════════════════════
+// M3 — Presets section, p/n keys, badges, dangling-ref (§) detection,
+//      and write-back via selected.source/selected.path.
+// ═══════════════════════════════════════════════════════════════════
+
+import { loadAsserts } from "../pi-assert/engine.js";
+import { createLocalPreset } from "../pi-assert/ui/asserts.js";
+import {
+  projectFilePath,
+  readSectionedFile,
+} from "../pi-assert/config.js";
+import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
+/** A theme that tags each role so badge colours are observable in assertions. */
+function tagTheme(): Theme {
+  return {
+    fg: (role: string, text: string) => `<${role}>${text}</${role}>`,
+    bold: (t: string) => t,
+    underline: (t: string) => t,
+  } as unknown as Theme;
+}
+
+/** Build a panel from a real on-disk config so `path`/`source` are populated. */
+function panelFromDir(cwd: string, active: Set<string> = new Set()): AssertsPanel {
+  const asserts = loadAsserts(cwd);
+  const state = {
+    asserts,
+    active,
+    enable(n: string) { active.add(n); },
+    disable(n: string) { active.delete(n); },
+    persist() {},
+    updateStatus() {},
+  } as unknown as AssertsState;
+  const panel = new AssertsPanel(state);
+  panel.setTheme(mockTheme());
+  return panel;
+}
+
+// ── Presets section: always present, ordered first ───────────────
+
+describe("AssertsPanel M3: Presets section", () => {
+  it("always shows the Presets header, even with no presets", () => {
+    const panel = makePanel([makeAssert("alpha")]);
+    const lines = panel.render(80);
+    assert.ok(
+      lines.some((l) => plain(l).includes("Presets")),
+      "Presets header is shown even with no presets installed",
+    );
+  });
+
+  it("orders sections Presets, local, then repos alpha", () => {
+    const panel = makePanel([
+      makeAssert("zzz-1", "repo/zzz"),
+      makeAssert("aaa-1", "repo/aaa"),
+      makeAssert("local-1"),
+      makePreset("bundle", ["local/local-1"]),
+    ]);
+    const lines = panel.render(80);
+    const headers = lines
+      .filter((l) => /^\s*(Presets|Local|repo\/)/.test(plain(l)))
+      .map((l) => plain(l).trim());
+    // First three section headers should be Presets, Local, repo/aaa.
+    assert.ok(headers[0]!.startsWith("Presets"), "Presets is first");
+    assert.ok(headers[1]!.startsWith("Local"), "Local is second");
+    assert.ok(headers[2]!.startsWith("repo/aaa"), "repo/aaa before repo/zzz");
+  });
+
+  it("hoists presets out of their real source into the Presets section", () => {
+    // A repo-sourced preset lands in Presets, not in its repo section.
+    const panel = makePanel([
+      makeAssert("guard", "owner/repo"),
+      makePreset("bundle", ["owner/repo/guard"], "owner/repo"),
+    ]);
+    const lines = panel.render(80);
+    // The preset row is under Presets, not under owner/repo.
+    const presetsHeaderIdx = lines.findIndex((l) => plain(l).includes("Presets"));
+    const repoHeaderIdx = lines.findIndex((l) => plain(l).includes("owner/repo"));
+    const bundleRowIdx = lines.findIndex((l) => plain(l).includes("bundle"));
+    assert.ok(presetsHeaderIdx > -1 && repoHeaderIdx > -1 && bundleRowIdx > -1);
+    assert.ok(
+      bundleRowIdx > presetsHeaderIdx && bundleRowIdx < repoHeaderIdx,
+      "preset row is between the Presets header and the repo header",
+    );
+  });
+});
+
+// ── p / n keys ────────────────────────────────────────────────────
+
+describe("AssertsPanel M3: p/n keys", () => {
+  it("p jumps focus to the first Presets row", () => {
+    const panel = makePanel([
+      makeAssert("alpha"),
+      makePreset("bundle", ["local/alpha"]),
+    ]);
+    // Initial focus lands on the first non-empty section — Presets (has bundle).
+    // Move away first to prove p returns.
+    panel.nav.cycleSection("next"); // → local
+    assert.equal(panel.nav.focusedSection, 1, "moved to local");
+    panel.handleInput("p", makeCtx());
+    assert.equal(panel.nav.focusedSection, 0, "p returns to the Presets section");
+    assert.equal(panel.nav.focusedIndex, 0, "p lands on the first Presets row");
+  });
+
+  it("p lands on the Presets header (index 0) when Presets is empty", () => {
+    const panel = makePanel([makeAssert("alpha")]); // no presets
+    panel.handleInput("p", makeCtx());
+    assert.equal(panel.nav.focusedSection, 0, "p focuses the empty Presets section");
+  });
+
+  it("advertises P on the Presets header, not in the hint line", () => {
+    // `p` jumps to Presets; the key is advertised on the Presets section
+    // header (always, even when not focused) instead of as a hint-line item.
+    const panel = makePanel([
+      makeAssert("alpha"),
+      makePreset("bundle", ["local/alpha"]),
+    ]);
+    // Start focused on local (first non-empty section is Presets, but move away
+    // so we can check the non-focused Presets header too).
+    panel.nav.cycleSection("next"); // → local
+    const lines = panel.render(80);
+    const presetsHeader = lines.find((l) => plain(l).includes("Presets"))!;
+    assert.ok(presetsHeader.includes("p"), "p is advertised on the Presets header");
+    // No `p Presets` entry in the hint line.
+    const hintLine = lines[lines.length - 1]!;
+    assert.ok(!/\bp\b/.test(hintLine) || !hintLine.includes("Presets"),
+      "no `p Presets` hint-line item");
+  });
+
+  it("n returns the create-preset action", () => {
+    const panel = makePanel([makeAssert("alpha")]);
+    assert.equal(panel.handleInput("n", makeCtx()), "create-preset");
+  });
+
+  it("n cancels the remove confirm instead of creating (confirm first)", () => {
+    const panel = makePanel([makeAssert("alpha", "repo/owner")]);
+    panel.handleInput("r", makeCtx()); // open remove confirm
+    assert.ok(panel.render(80).some((l) => l.includes(`Remove "alpha"?`)));
+    panel.handleInput("n", makeCtx()); // n → cancel confirm
+    assert.ok(
+      !panel.render(80).some((l) => l.includes(`Remove "alpha"?`)),
+      "n cancelled the confirm (did not create a preset)",
+    );
+  });
+
+  it("n feeds the search query (not an action) while searching", () => {
+    const panel = makePanel([makeAssert("alpha"), makeAssert("no-env")]);
+    panel.handleInput("/", makeCtx());
+    panel.handleInput("n", makeCtx());
+    assert.ok(panel.isSearchActive, "still in search after n");
+    const qLine = panel.render(80).find((l) => l.endsWith("▏"));
+    assert.ok(qLine && qLine.includes("n"), "n appended to the query");
+  });
+});
+
+// ── Badges: P (preset), § (dangling), ⚠ (orphaned) ────────────────
+
+describe("AssertsPanel M3: badges", () => {
+  it("renders a P badge on presets (accent, outside the accent wrap)", () => {
+    const theme = tagTheme();
+    const state = {
+      asserts: [makeAssert("guard"), makePreset("bundle", ["local/guard"])],
+      active: new Set<string>(),
+    } as unknown as AssertsState;
+    const panel = new AssertsPanel(state);
+    panel.setTheme(theme);
+    // Focus Presets so the preset row is the highlighted one.
+    panel.handleInput("p", makeCtx());
+    const focused = panel.render(80).find((l) => l.includes("bundle"))!;
+    // The P badge is its own accent run (`<accent>P </accent>`), rendered
+    // before the row body, so it keeps its colour on the selected row.
+    assert.ok(focused.includes("<accent>P </accent>"), "P badge is accent-coloured");
+  });
+
+  it("does not render a P badge on shell asserts", () => {
+    const panel = makePanel([makeAssert("guard")]);
+    const line = panel.render(80).find((l) => plain(l).includes("guard"))!;
+    assert.ok(!line.includes("P "), "no P badge on a shell assert");
+  });
+
+  it("renders a § badge on a preset with a dangling ref", () => {
+    const panel = makePanel([makePreset("bundle", ["local/missing"])]);
+    const line = panel.render(80).find((l) => plain(l).includes("bundle"))!;
+    assert.ok(line.includes("§ "), "dangling preset gets a § badge");
+  });
+
+  it("does not render a § badge on a preset whose refs all resolve", () => {
+    const panel = makePanel([
+      makeAssert("guard"),
+      makePreset("bundle", ["local/guard"]),
+    ]);
+    const line = panel.render(80).find((l) => plain(l).includes("bundle"))!;
+    assert.ok(!line.includes("§ "), "no § badge when every ref resolves");
+  });
+
+  it("treats a ref to a preset as dangling (no nested presets)", () => {
+    const panel = makePanel([
+      makePreset("outer", ["local/inner"]),
+      makePreset("inner", []),
+    ]);
+    const outerLine = panel.render(80).find((l) => plain(l).includes("outer"))!;
+    assert.ok(
+      outerLine.includes("§ "),
+      "a ref to a preset (not a shell assert) is dangling",
+    );
+  });
+
+  it("aligns the status column across mixed P / § badge sets within Presets", () => {
+    // Two presets in the Presets section: clean (P only) and dangling (P + §).
+    // Their badge widths differ, but `maxLabelWidth` reserves the badge width
+    // so the status column aligns within the section.
+    const panel = makePanel([
+      makePreset("clean", ["local/missing-a"]),
+      makePreset("dangling", ["local/missing-b"]),
+    ]);
+    panel.handleInput("p", makeCtx()); // focus Presets
+    const lines = panel.render(80);
+    const strip = (s: string) => s.replace(/[\[\]]/g, "").replace(/^[> ]{2}/, "");
+    const cleanRow = strip(rowFor(lines, "clean")!);
+    const danglingRow = strip(rowFor(lines, "dangling")!);
+    assert.ok(cleanRow.includes("disabled") && danglingRow.includes("disabled"));
+    assert.equal(
+      cleanRow.indexOf("disabled"),
+      danglingRow.indexOf("disabled"),
+      "P-only and P+§ rows align their status column",
+    );
+  });
+
+  it("co-renders § and ⚠ on a dangling preset removed upstream", async () => {
+    clearRepoEntriesCache();
+    // The repo has no entry for "bundle" → it's orphaned (⚠).  Its ref
+    // "local/missing" doesn't resolve → dangling (§).  Both badges co-occur.
+    mockRepoFetch(["rules/defaults.json"], {
+      other: { description: "O.", hook: "tool_call", shell: "true" },
+    });
+    const panel = makePanel([
+      makePreset("bundle", ["local/missing"], "owner/repo"),
+    ]);
+    panel.setRequestRender(() => {});
+    panel.startOrphanCheck();
+    await new Promise((r) => setImmediate(r));
+
+    const line = panel.render(80).find((l) => plain(l).includes("bundle"))!;
+    assert.ok(line.includes("P "), "P badge on the preset");
+    assert.ok(line.includes("§ "), "§ badge (dangling)");
+    assert.ok(line.includes("⚠ "), "⚠ badge (orphaned)");
+  });
+});
+
+// ── § dangling-ref detail line ────────────────────────────────────
+
+describe("AssertsPanel M3: § dangling-ref detail", () => {
+  it("lists the dangling refs under a focused dangling preset", () => {
+    const panel = makePanel([
+      makePreset("bundle", ["local/missing", "owner/repo/gone"]),
+    ]);
+    // Presets is the focused section (first non-empty).
+    const lines = panel.render(80);
+    const idx = lines.findIndex((l) => plain(l).includes("bundle"));
+    assert.ok(idx >= 0, "preset row renders");
+    const detail = lines.slice(idx + 1).join("\n");
+    assert.ok(
+      detail.includes("§") && detail.includes("dangling"),
+      "a § dangling warning line is shown under the preset",
+    );
+    assert.ok(
+      detail.includes("local/missing") && detail.includes("owner/repo/gone"),
+      "both dangling refs are listed",
+    );
+  });
+
+  it("does not show the § detail under a preset whose refs resolve", () => {
+    const panel = makePanel([
+      makeAssert("guard"),
+      makePreset("bundle", ["local/guard"]),
+    ]);
+    const lines = panel.render(80);
+    assert.ok(
+      !lines.some((l) => l.includes("dangling")),
+      "no dangling detail when refs resolve",
+    );
+  });
+});
+
+// ── Write-back uses selected.source / selected.path ────────────────
+//
+// The Presets group is synthetic (label "Presets"), so `r`/`t` must write
+// through the preset's real source/path on the Assert object — not the
+// group label.  These use a real on-disk config so the write actually lands.
+
+describe("AssertsPanel M3: write-back via selected.source/path", () => {
+  let tmpRoot: string;
+  before(() => {
+    tmpRoot = join(tmpdir(), `pi-assert-m3-test-${Date.now()}`);
+    mkdirSync(tmpRoot, { recursive: true });
+  });
+  after(() => rmSync(tmpRoot, { recursive: true, force: true }));
+
+  function writeConfig(cwd: string, data: unknown): void {
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    writeFileSync(projectFilePath(cwd), JSON.stringify(data));
+  }
+
+  it("r removes a preset from its real source section (not a 'Presets' section)", () => {
+    const cwd = join(tmpRoot, "remove-preset");
+    writeConfig(cwd, {
+      local: {
+        guard: { description: "G", hook: "tool_call", shell: "true" },
+        bundle: { description: "B", preset: ["local/guard"] },
+      },
+    });
+    const panel = panelFromDir(cwd);
+
+    // Focus the preset (Presets section, first non-empty).
+    assert.equal(panel.nav.focusedSection, 0, "Presets is focused");
+    assert.equal(panel.nav.focusedItem?.name, "bundle");
+
+    const ctx = {
+      cwd,
+      ui: { notify() {}, theme: mockTheme(), setStatus() {} },
+    } as unknown as ExtensionContext;
+    panel.handleInput("r", ctx);  // open confirm
+    const result = panel.handleInput("y", ctx); // confirm → reload
+    assert.equal(result, "reload");
+
+    // The preset must be gone from the `local` section — proving removeRule
+    // was called with selected.source ("local"), not the "Presets" group label.
+    const after = readSectionedFile(projectFilePath(cwd));
+    assert.ok(
+      !(after.local as Record<string, unknown> | undefined)?.bundle,
+      "preset removed from its real source section",
+    );
+    assert.ok(
+      (after.local as Record<string, unknown> | undefined)?.guard,
+      "the unrelated guard assert is untouched",
+    );
+    // No synthetic "Presets" section was ever written.
+    assert.ok(after.Presets === undefined, "no Presets section on disk");
+  });
+
+  it("t toggles default through the preset's real source/path", () => {
+    const cwd = join(tmpRoot, "toggle-preset");
+    writeConfig(cwd, {
+      local: {
+        guard: { description: "G", hook: "tool_call", shell: "true" },
+        bundle: { description: "B", preset: ["local/guard"] },
+      },
+    });
+    const panel = panelFromDir(cwd);
+    assert.equal(panel.nav.focusedItem?.name, "bundle");
+
+    panel.handleInput("t", makeCtx());
+
+    const after = readSectionedFile(projectFilePath(cwd));
+    const bundle = (after.local as Record<string, unknown>).bundle as Record<string, unknown>;
+    assert.equal(bundle.default, true, "default toggled to true on the preset");
+    assert.deepEqual(
+      bundle.preset,
+      ["local/guard"],
+      "preset refs are preserved through the toggle",
+    );
+  });
+});
+
+// ── createLocalPreset (n flow) ────────────────────────────────────
+
+describe("createLocalPreset", () => {
+  let tmpRoot: string;
+  before(() => {
+    tmpRoot = join(tmpdir(), `pi-assert-create-test-${Date.now()}`);
+    mkdirSync(tmpRoot, { recursive: true });
+  });
+  after(() => rmSync(tmpRoot, { recursive: true, force: true }));
+
+  /** A ctx whose `ui.custom` drives a single textInputDialog, capturing notify calls. */
+  function makeCreateCtx(cwd: string): {
+    ctx: ExtensionContext;
+    notifications: string[];
+    drive: (name: string) => void;
+    driveCancel: () => void;
+  } {
+    let triple: { handleInput: (d: string) => void } | null = null;
+    const notifications: string[] = [];
+    const theme = mockTheme();
+
+    const ctx = {
+      ui: {
+        // `textInputDialog` calls `ctx.ui.custom(factory, overlay)`; we run
+        // the factory to grab its `{ handleInput }` triple, and resolve the
+        // promise when the factory's `done` is called (Enter/Esc).
+        custom<U>(
+          fn: (
+            tui: unknown,
+            theme: unknown,
+            kb: unknown,
+            done: (v: U) => void,
+          ) => { handleInput: (d: string) => void },
+          _overlay: unknown,
+        ): Promise<U> {
+          return new Promise<U>((resolve) => {
+            triple = fn(
+              { requestRender() {} },
+              theme,
+              {},
+              (v: U) => resolve(v),
+            ) as { handleInput: (d: string) => void };
+          });
+        },
+        theme,
+        notify(msg: string) { notifications.push(msg); },
+        setStatus() {},
+      },
+      cwd,
+    } as unknown as ExtensionContext;
+
+    const drive = (name: string): void => {
+      const t = triple!;
+      for (const ch of name) t.handleInput(ch);
+      t.handleInput("\r"); // Enter → done(name)
+    };
+    const driveCancel = (): void => {
+      triple!.handleInput("\x1b"); // Esc → done(null)
+    };
+    return { ctx, notifications, drive, driveCancel };
+  }
+
+  it("creates an empty local preset (description '', preset [], no default)", async () => {
+    const cwd = join(tmpRoot, "create");
+    mkdirSync(cwd, { recursive: true });
+    const asserts = loadAsserts(cwd); // empty
+    const state = { asserts, active: new Set<string>() } as unknown as AssertsState;
+
+    const { ctx, notifications, drive } = makeCreateCtx(cwd);
+    const p = createLocalPreset(ctx, state);
+    drive("my-preset");
+    await p;
+
+    const after = readSectionedFile(projectFilePath(cwd));
+    const entry = (after.local as Record<string, unknown>)["my-preset"] as Record<string, unknown>;
+    assert.deepEqual(entry, { description: "", preset: [] }, "empty preset written");
+    assert.ok(
+      notifications.some((n) => n.includes("created preset")),
+      "created notification emitted",
+    );
+  });
+
+  it("warns and does not overwrite when the name already exists locally", async () => {
+    const cwd = join(tmpRoot, "exists");
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    writeFileSync(projectFilePath(cwd), JSON.stringify({
+      local: { "my-preset": { description: "keep me", hook: "tool_call", shell: "false" } },
+    }));
+    const state = {
+      asserts: loadAsserts(cwd),
+      active: new Set<string>(),
+    } as unknown as AssertsState;
+
+    const { ctx, notifications, drive } = makeCreateCtx(cwd);
+    const p = createLocalPreset(ctx, state);
+    drive("my-preset");
+    await p;
+
+    // The existing assert is untouched (not overwritten with an empty preset).
+    const after = readSectionedFile(projectFilePath(cwd));
+    const entry = (after.local as Record<string, unknown>)["my-preset"] as Record<string, unknown>;
+    assert.equal(entry.description, "keep me", "existing entry not clobbered");
+    assert.equal(entry.shell, "false", "existing shell preserved");
+    assert.ok(
+      notifications.some((n) => n.includes("already exists locally")),
+      "a warning was emitted about the name clash",
+    );
+  });
+
+  it("Esc (null name) creates nothing", async () => {
+    const cwd = join(tmpRoot, "cancel");
+    mkdirSync(cwd, { recursive: true });
+    const state = {
+      asserts: loadAsserts(cwd),
+      active: new Set<string>(),
+    } as unknown as AssertsState;
+
+    const { ctx, driveCancel } = makeCreateCtx(cwd);
+    const p = createLocalPreset(ctx, state);
+    driveCancel();
+    await p;
+
+    assert.ok(!existsSync(projectFilePath(cwd)), "no file written on cancel");
+  });
+});
