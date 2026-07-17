@@ -24,7 +24,7 @@ import {
 // ---------------------------------------------------------------------------
 
 /** Fields shared by every assert entry, shell or preset. */
-export interface AssertBase {
+interface AssertBase {
   /** Unique name of this assert (or preset). */
   name: string;
   /** Source section: "local" or a repo key like "owner/repo". */

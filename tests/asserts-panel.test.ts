@@ -20,6 +20,7 @@ function mockTheme(): Theme {
       role === "accent" ? `[${text}]` : text,
     bold: (text: string) => text,
     underline: (text: string) => text,
+    strikethrough: (text: string) => text,
   } as unknown as Theme;
 }
 
@@ -1322,6 +1323,7 @@ describe("AssertsPanel fuzzy search", () => {
       fg: (_role: string, text: string) => text,
       bold: (text: string) => `<b>${text}</b>`,
       underline: (text: string) => `<u>${text}</u>`,
+      strikethrough: (text: string) => text,
     } as unknown as Theme;
     const state = {
       asserts: [makeAssert("no-env"), makeAssert("write-guard")],
@@ -1345,6 +1347,7 @@ describe("AssertsPanel fuzzy search", () => {
       fg: (_role: string, text: string) => text,
       bold: (text: string) => `<b>${text}</b>`,
       underline: (text: string) => `<u>${text}</u>`,
+      strikethrough: (text: string) => text,
     } as unknown as Theme;
     const state = {
       asserts: [makeAssert("alpha", "local", false, { shell: "run env-check" })],
@@ -1597,6 +1600,7 @@ function tagTheme(): Theme {
     fg: (role: string, text: string) => `<${role}>${text}</${role}>`,
     bold: (t: string) => t,
     underline: (t: string) => t,
+    strikethrough: (t: string) => `<s>${t}</s>`,
   } as unknown as Theme;
 }
 
@@ -1732,29 +1736,114 @@ describe("AssertsPanel M3: p/n keys", () => {
   });
 });
 
-// ── Badges: P (preset), § (dangling), ⚠ (orphaned) ────────────────
+// ── e key: edit preset (local only) ──────────────────────────────
 
-describe("AssertsPanel M3: badges", () => {
-  it("renders a P badge on presets (accent, outside the accent wrap)", () => {
+describe("AssertsPanel M3: e key (edit preset, local only)", () => {
+  it("e on a local preset returns the edit-preset action", () => {
+    const panel = makePanel([makePreset("bundle", ["local/guard"], "local")]);
+    panel.handleInput("p", makeCtx()); // focus Presets
+    const result = panel.handleInput("e", makeCtx());
+    assert.ok(result && typeof result === "object" && result.type === "edit-preset");
+  });
+
+  it("e on a non-local preset notifies (read-only) and does not edit", () => {
+    const notified: string[] = [];
+    const ctx = {
+      ui: { notify: (msg: string) => notified.push(msg), theme: mockTheme(), setStatus() {} },
+    } as unknown as ExtensionContext;
+    const panel = makePanel([makePreset("bundle", [], "owner/repo")]);
+    panel.handleInput("p", makeCtx()); // focus Presets
+    const result = panel.handleInput("e", ctx);
+    assert.strictEqual(result, undefined, "no edit-preset action for a non-local preset");
+    assert.ok(notified.some((m) => /read-only/.test(m)), "notified read-only");
+  });
+
+  it("e on a shell assert notifies (presets only)", () => {
+    const notified: string[] = [];
+    const ctx = {
+      ui: { notify: (msg: string) => notified.push(msg), theme: mockTheme(), setStatus() {} },
+    } as unknown as ExtensionContext;
+    const panel = makePanel([makeAssert("guard")]);
+    const result = panel.handleInput("e", ctx);
+    assert.strictEqual(result, undefined, "no edit-preset action for a shell assert");
+    assert.ok(notified.some((m) => /presets only/.test(m)), "notified presets only");
+  });
+});
+
+// ── e hint: crossed out for non-local (read-only) presets ─────────
+
+describe("AssertsPanel M3: e hint (crossed out for non-local presets)", () => {
+  it("shows the e Edit preset hint (normal) for a focused local preset", () => {
     const theme = tagTheme();
     const state = {
-      asserts: [makeAssert("guard"), makePreset("bundle", ["local/guard"])],
+      asserts: [makePreset("bundle", [], "local")],
       active: new Set<string>(),
     } as unknown as AssertsState;
     const panel = new AssertsPanel(state);
     panel.setTheme(theme);
-    // Focus Presets so the preset row is the highlighted one.
-    panel.handleInput("p", makeCtx());
-    const focused = panel.render(80).find((l) => l.includes("bundle"))!;
-    // The P badge is its own accent run (`<accent>P </accent>`), rendered
-    // before the row body, so it keeps its colour on the selected row.
-    assert.ok(focused.includes("<accent>P </accent>"), "P badge is accent-coloured");
+    panel.handleInput("p", makeCtx()); // focus Presets
+    const lines = panel.render(80);
+    const hintLine = lines.find((l) => l.includes("Edit preset"))!;
+    assert.ok(hintLine, "e Edit preset hint is shown");
+    assert.ok(hintLine.includes("<accent>e</accent>"), "e key is accent (normal)");
+    assert.ok(!hintLine.includes("<s>"), "not struck through for a local preset");
   });
 
-  it("does not render a P badge on shell asserts", () => {
+  it("crosses out the e Edit preset hint for a focused non-local preset", () => {
+    const theme = tagTheme();
+    const state = {
+      asserts: [makePreset("bundle", [], "owner/repo")],
+      active: new Set<string>(),
+    } as unknown as AssertsState;
+    const panel = new AssertsPanel(state);
+    panel.setTheme(theme);
+    panel.handleInput("p", makeCtx()); // focus Presets
+    const lines = panel.render(80);
+    const hintLine = lines.find((l) => l.includes("Edit preset"))!;
+    assert.ok(hintLine, "e Edit preset hint is still shown (crossed)");
+    assert.ok(hintLine.includes("<s>"), "struck through (disabled)");
+    assert.ok(
+      !hintLine.includes("<accent>e</accent>"),
+      "e key not accent when disabled",
+    );
+  });
+
+  it("does not show the e hint when a shell assert is focused", () => {
+    const panel = makePanel([makeAssert("guard")]);
+    const lines = panel.render(80);
+    assert.ok(
+      !lines.some((l) => l.includes("Edit preset")),
+      "no e hint when a shell assert is focused",
+    );
+  });
+});
+
+// ── Badges: ❄ (read-only/non-local), § (dangling), ⚠ (orphaned) ─────
+
+describe("AssertsPanel M3: badges", () => {
+  it("renders a ❄ badge on non-local presets (read-only), none on local", () => {
+    const theme = tagTheme();
+    const state = {
+      asserts: [
+        makePreset("local-p", [], "local"),
+        makePreset("repo-p", [], "owner/repo"),
+      ],
+      active: new Set<string>(),
+    } as unknown as AssertsState;
+    const panel = new AssertsPanel(state);
+    panel.setTheme(theme);
+    panel.handleInput("p", makeCtx()); // focus Presets
+    const lines = panel.render(80);
+    const localLine = lines.find((l) => l.includes("local-p"))!;
+    const repoLine = lines.find((l) => l.includes("repo-p"))!;
+    assert.ok(!localLine.includes("❄"), "local preset has no ❄ badge");
+    assert.ok(repoLine.includes("<dim>❄ </dim>"), "non-local preset has a ❄ badge");
+  });
+
+  it("does not render a ❄ badge on shell asserts", () => {
     const panel = makePanel([makeAssert("guard")]);
     const line = panel.render(80).find((l) => plain(l).includes("guard"))!;
-    assert.ok(!line.includes("P "), "no P badge on a shell assert");
+    assert.ok(!line.includes("❄"), "no ❄ badge on a shell assert");
   });
 
   it("renders a § badge on a preset with a dangling ref", () => {
@@ -1784,13 +1873,14 @@ describe("AssertsPanel M3: badges", () => {
     );
   });
 
-  it("aligns the status column across mixed P / § badge sets within Presets", () => {
-    // Two presets in the Presets section: clean (P only) and dangling (P + §).
-    // Their badge widths differ, but `maxLabelWidth` reserves the badge width
-    // so the status column aligns within the section.
+  it("aligns the status column across mixed no-badge / § badge sets within Presets", () => {
+    // Two local presets in the Presets section: clean (no badge) and dangling
+    // (§).  Their badge widths differ, but `maxLabelWidth` reserves the badge
+    // width so the status column aligns within the section.
     const panel = makePanel([
-      makePreset("clean", ["local/missing-a"]),
-      makePreset("dangling", ["local/missing-b"]),
+      makeAssert("guard"),
+      makePreset("clean", ["local/guard"]),
+      makePreset("dangling", ["local/missing"]),
     ]);
     panel.handleInput("p", makeCtx()); // focus Presets
     const lines = panel.render(80);
@@ -1801,14 +1891,15 @@ describe("AssertsPanel M3: badges", () => {
     assert.equal(
       cleanRow.indexOf("disabled"),
       danglingRow.indexOf("disabled"),
-      "P-only and P+§ rows align their status column",
+      "no-badge and § rows align their status column",
     );
   });
 
-  it("co-renders § and ⚠ on a dangling preset removed upstream", async () => {
+  it("co-renders ❄, § and ⚠ on a dangling non-local preset removed upstream", async () => {
     clearRepoEntriesCache();
     // The repo has no entry for "bundle" → it's orphaned (⚠).  Its ref
-    // "local/missing" doesn't resolve → dangling (§).  Both badges co-occur.
+    // "local/missing" doesn't resolve → dangling (§).  It's non-local → ❄.
+    // All three badges co-occur.
     mockRepoFetch(["rules/defaults.json"], {
       other: { description: "O.", hook: "tool_call", shell: "true" },
     });
@@ -1820,7 +1911,7 @@ describe("AssertsPanel M3: badges", () => {
     await new Promise((r) => setImmediate(r));
 
     const line = panel.render(80).find((l) => plain(l).includes("bundle"))!;
-    assert.ok(line.includes("P "), "P badge on the preset");
+    assert.ok(line.includes("❄ "), "❄ badge (non-local / read-only)");
     assert.ok(line.includes("§ "), "§ badge (dangling)");
     assert.ok(line.includes("⚠ "), "⚠ badge (orphaned)");
   });
@@ -1857,6 +1948,44 @@ describe("AssertsPanel M3: § dangling-ref detail", () => {
     assert.ok(
       !lines.some((l) => l.includes("dangling")),
       "no dangling detail when refs resolve",
+    );
+  });
+});
+
+// ── ❄ non-editable detail line ──────────────────────────────────────
+
+describe("AssertsPanel M3: ❄ non-editable detail", () => {
+  it("shows a non-editable note under a focused non-local preset", () => {
+    const panel = makePanel([makePreset("bundle", [], "owner/repo")]);
+    const lines = panel.render(80);
+    const idx = lines.findIndex((l) => plain(l).includes("bundle"));
+    assert.ok(idx >= 0, "preset row renders");
+    const detail = lines.slice(idx + 1).join("\n");
+    assert.ok(
+      detail.includes("❄") && detail.includes("non-editable"),
+      "a ❄ non-editable note is shown under the preset",
+    );
+    assert.ok(
+      detail.includes("copy via n"),
+      "guides the user to the copy workaround",
+    );
+  });
+
+  it("does not show the non-editable note under a local preset", () => {
+    const panel = makePanel([makePreset("bundle", [], "local")]);
+    const lines = panel.render(80);
+    assert.ok(
+      !lines.some((l) => l.includes("non-editable")),
+      "no non-editable note for a local preset",
+    );
+  });
+
+  it("does not show the non-editable note under a shell assert", () => {
+    const panel = makePanel([makeAssert("guard")]);
+    const lines = panel.render(80);
+    assert.ok(
+      !lines.some((l) => l.includes("non-editable")),
+      "no non-editable note for a shell assert",
     );
   });
 });

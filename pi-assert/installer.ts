@@ -13,7 +13,7 @@ import {
 // ---------------------------------------------------------------------------
 
 /** A single assert entry in a rules/*.json file from a pi-assert-rules repo. */
-export interface RuleAssert {
+interface RuleAssert {
   /** Human-readable description shown in the install TUI and persisted on install. */
   description: string;
   hook: string;
@@ -24,7 +24,7 @@ export interface RuleAssert {
 }
 
 /** A single preset entry in a rules/*.json file from a pi-assert-rules repo. */
-export interface RulePreset {
+interface RulePreset {
   /** Human-readable description shown in the install TUI and persisted on install. */
   description: string;
   preset: string[];
@@ -357,7 +357,7 @@ export function cleanEntry(entry: RuleEntry): Record<string, unknown> {
  * {@link RuleEntry} (repo side) and the runtime `Assert` (installed side)
  * satisfy it, so the comparison functions stay decoupled from `engine.ts`.
  */
-export interface SignableAssert {
+interface SignableAssert {
   description: string;
   hook: string;
   shell: string;
@@ -366,7 +366,7 @@ export interface SignableAssert {
 }
 
 /** Minimal shape needed to compute a preset's content signature. */
-export interface SignablePreset {
+interface SignablePreset {
   description: string;
   preset: string[];
 }
@@ -457,18 +457,21 @@ export function classifyEntry(
 }
 
 /**
- * Remove a named assert from a specific repo section.
- * Prunes the section key entirely if it becomes empty.
- * Returns true if the assert was found and removed.
+ * Remove a named entry from a specific source section of the file at `path`.
+ * Prunes the section key entirely if it becomes empty.  Returns true if the
+ * entry was found and removed.
+ *
+ * Path-aware core: {@link removeRule} delegates here on the project file
+ * (`projectFilePath(cwd)`).
  */
-export function removeRule(
-  cwd: string,
-  repo: string,
+function removeRuleAt(
+  path: string,
+  source: string,
   name: string,
 ): boolean {
-  const current = readProjectFile(cwd);
+  const current = readProjectFileAt(path);
 
-  const section = current[repo] as Record<string, unknown> | undefined;
+  const section = current[source] as Record<string, unknown> | undefined;
   if (!section || typeof section !== "object" || !(name in section)) {
     return false;
   }
@@ -477,11 +480,27 @@ export function removeRule(
 
   // Prune empty section
   if (Object.keys(section).length === 0) {
-    delete current[repo];
+    delete current[source];
   }
 
-  writeProjectFile(cwd, current);
+  writeSectionedFile(path, current);
   return true;
+}
+
+/**
+ * Remove a named assert from a specific repo section of the project file.
+ * Prunes the section key entirely if it becomes empty.
+ * Returns true if the assert was found and removed.
+ *
+ * Delegates to {@link removeRuleAt} on the project file
+ * (`projectFilePath(cwd)`).
+ */
+export function removeRule(
+  cwd: string,
+  repo: string,
+  name: string,
+): boolean {
+  return removeRuleAt(projectFilePath(cwd), repo, name);
 }
 
 /**
@@ -545,6 +564,47 @@ export function updateRule(
 
   writeSectionedFile(path, current);
   return true;
+}
+
+/**
+ * Edit a **local** preset's `description` and `preset` refs in place.
+ *
+ * Writes the edited preset to the `local` section of the file at `path` (the
+ * project or global file — wherever the preset lives), preserving the on-disk
+ * `default` via {@link updateRule} (which reads and re-applies it — like an
+ * update).
+ *
+ * Only local presets are editable: the `/asserts` panel's `e` action is gated
+ * on `source === "local"`, and non-local presets render a `❄` (read-only)
+ * badge.  Repo presets are never edited in place — forking a repo preset to
+ * local on edit was removed; to customize a repo preset, copy its content into
+ * a new local preset via `n`.
+ *
+ * Preserves the on-disk `default` through the write (like `updateRule`):
+ * `cleanEntry`'s preset branch runs with the existing `default`, so a
+ * `t`-enabled preset `e`-edited doesn't silently lose its default.
+ *
+ * Throws when the entry is missing from disk (stale state).
+ */
+export function editPresetRule(
+  path: string,
+  name: string,
+  description: string,
+  preset: string[],
+): void {
+  // Edit in place: write to the owning file's `local` section.  `updateRule`
+  // preserves the on-disk `default` (it reads + re-applies it), so the
+  // passed `default: undefined` is ignored on purpose.
+  const ok = updateRule(path, "local", name, {
+    description,
+    preset,
+    default: undefined,
+  });
+  if (!ok) {
+    throw new Error(
+      `preset "${name}" not found in section "local" of ${path}`,
+    );
+  }
 }
 
 /**

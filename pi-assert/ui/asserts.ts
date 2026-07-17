@@ -3,18 +3,20 @@ import {
   Container,
   matchesKey,
   Key,
-  truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import { isPreset, type Assert } from "../engine.js";
+import { isPreset, type Assert, type PresetAssert } from "../engine.js";
 import {
   fetchRepoEntries,
   installRule,
   removeRule,
   setAssertDefault,
+  editPresetRule,
 } from "../installer.js";
+import { projectFilePath } from "../config.js";
 import {
   HINT_D_DISABLE_ALL,
+  HINT_E_EDIT_PRESET,
   HINT_ENTER_ENABLE,
   HINT_ESC_CANCEL,
   HINT_ESC_EXIT_SEARCH,
@@ -26,23 +28,17 @@ import {
   OverlayBox,
   SectionNavigator,
   dialogOverlay,
-  filterPrintable,
   renderAssertDetail,
   renderDetailList,
   renderHintLine,
   textInputDialog,
+  type HintItem,
 } from "./components.js";
-import { filterSection, highlightSegments } from "./fuzzy.js";
+import { highlightSegments } from "./fuzzy.js";
+import { SectionedPanel, type Group, groupShellBySource } from "./sectioned-panel.js";
 import type { AssertsState } from "./state.js";
 import { runInstallWizard } from "./install.js";
-
-// ---------------------------------------------------------------------------
-// Group: an ordered list of asserts that share a `source`.
-// ---------------------------------------------------------------------------
-interface Group {
-  source: string;
-  asserts: Assert[];
-}
+import { runPresetEditor } from "./preset-editor.js";
 
 // Order: always-present **Presets** section first (header shown even when
 // empty, so `p`/`n` always have a home), then `local`, then repos alpha.
@@ -51,26 +47,9 @@ interface Group {
 // `selected.path` (the preset's real section), not the group label.
 const PRESETS_SOURCE = "Presets";
 function groupBySource(asserts: Assert[]): Group[] {
-  const presets: Assert[] = [];
-  const bySource = new Map<string, Assert[]>();
-  for (const a of asserts) {
-    if (isPreset(a)) {
-      presets.push(a);
-      continue;
-    }
-    const list = bySource.get(a.source) ?? [];
-    list.push(a);
-    bySource.set(a.source, list);
-  }
-  const groups: Group[] = [{ source: PRESETS_SOURCE, asserts: presets }];
-  for (const source of Array.from(bySource.keys()).sort((a, b) => {
-    if (a === "local") return -1;
-    if (b === "local") return 1;
-    return a.localeCompare(b);
-  })) {
-    groups.push({ source, asserts: bySource.get(source)! });
-  }
-  return groups;
+  const presets = asserts.filter(isPreset);
+  const shell = asserts.filter((a) => !isPreset(a));
+  return [{ source: PRESETS_SOURCE, asserts: presets }, ...groupShellBySource(shell)];
 }
 
 // ---------------------------------------------------------------------------
@@ -111,26 +90,15 @@ function buildPresetCoverage(
 // ---------------------------------------------------------------------------
 // AssertsPanel — model + render + input for the /asserts toggle UI.
 // ---------------------------------------------------------------------------
-type PanelAction = "cancel" | "install" | "reload" | "create-preset";
+type PanelAction =
+  | "cancel"
+  | "install"
+  | "reload"
+  | "create-preset"
+  | { type: "edit-preset"; preset: PresetAssert };
 
-export class AssertsPanel {
-  groups: Group[];
-  nav: SectionNavigator<Assert>;
+export class AssertsPanel extends SectionedPanel {
   private confirm: { name: string; source: string } | null = null;
-
-  // ── Search mode state ─────────────────────────────────────────────
-  // During search `this.groups` / `this.nav` are swapped to filtered
-  // versions (a subset of the originals, same `Assert` object references);
-  // `bodyLines` / `renderSection` / windowing all run unchanged against
-  // the filtered model. `savedGroups` / `savedNav` hold the originals and
-  // are restored on `Esc`. This is the one shared implementation — no
-  // parallel render path (see AGENTS.md).
-  private searchActive = false;
-  private query = "";
-  private savedGroups: Group[] | null = null;
-  private savedNav: SectionNavigator<Assert> | null = null;
-  /** Whether search state is currently exposed (used by tests). */
-  get isSearchActive(): boolean { return this.searchActive; }
 
   /**
    * Composite keys (`${source}\0${name}`) of installed asserts that no longer
@@ -205,94 +173,13 @@ export class AssertsPanel {
   /** Re-render trigger, set by the caller so async fetch resolution can flip badges in. */
   private requestRender: () => void = () => {};
 
-  // ── Search lifecycle ───────────────────────────────────────────────
-  /** Enter fuzzy-search mode. No-op when there's nothing to search. */
-  private enterSearch(): void {
-    if (this.state.broken || this.state.asserts.length === 0) return;
-    this.searchActive = true;
-    this.query = "";
-    this.savedGroups = this.groups;
-    this.savedNav = this.nav;
-    this.applyFilter();
-  }
-
-  /** Exit search; restore focus to the highlighted match in the unfiltered view. */
-  private exitSearch(): void {
-    const kept = this.groups[this.nav.focusedSection]?.asserts[this.nav.focusedIndex];
-    this.groups = this.savedGroups ?? this.groups;
-    this.nav = this.savedNav ?? this.nav;
-    this.savedGroups = null;
-    this.savedNav = null;
-    this.searchActive = false;
-    this.query = "";
-    if (kept) this.restoreFocus(kept);
-  }
-
-  /** Append printable input to the query and re-filter. */
-  private appendQuery(data: string): void {
-    const filtered = filterPrintable(data);
-    if (!filtered) return;
-    this.query += filtered;
-    this.applyFilter();
-  }
-
-  /** Pop the last query char and re-filter (no-op on an empty query). */
-  private popQuery(): void {
-    if (this.query.length === 0) return;
-    this.query = this.query.slice(0, -1);
-    this.applyFilter();
-  }
-
-  /**
-   * Rebuild filtered `groups` / `nav` from `savedGroups` + the current
-   * query, then restore focus to the previously-highlighted assert
-   * (best-effort). Empty/whitespace-only query reproduces every section
-   * unchanged (scores 0). Filtering keeps the same `Assert` references, so
-   * `restoreFocus` can use identity (`indexOf`) lookup.
-   */
-  private applyFilter(): void {
-    const keep = this.groups[this.nav.focusedSection]?.asserts[this.nav.focusedIndex];
-    const filtered = (this.savedGroups ?? this.groups)
-      .map((g) => ({
-        source: g.source,
-        asserts: filterSection(this.query, g.asserts).map((m) => m.assert),
-      }))
-      .filter((g) => g.asserts.length > 0);
-    this.groups = filtered;
-    this.nav = new SectionNavigator(filtered.map((g) => ({ items: g.asserts })));
-    this.restoreFocus(keep);
-  }
-
-  /** Point `nav` at `a`'s section/index in the current (filtered) groups. */
-  private restoreFocus(a: Assert | undefined): void {
-    if (!a) {
-      if (this.groups.length) { this.nav.focus = 0; this.nav.selection[0] = 0; }
-      return;
-    }
-    for (let s = 0; s < this.groups.length; s++) {
-      const idx = this.groups[s]!.asserts.indexOf(a); // identity (===)
-      if (idx >= 0) {
-        this.nav.focus = s;
-        this.nav.selection[s] = idx;
-        return;
-      }
-    }
-    // `a` filtered out: stay in its source section if any filtered group
-    // shares `a.source` (by string — section indices shift as empty
-    // sections drop, so positional lookup is unsafe), else first match.
-    const sec = this.groups.findIndex((g) => g.source === a.source);
-    if (sec >= 0) {
-      this.nav.focus = sec;
-      this.nav.selection[sec] = 0;
-      return;
-    }
-    if (this.groups.length) {
-      this.nav.focus = 0;
-      this.nav.selection[0] = 0;
-    }
+  /** Search guard: nothing to search when the config is broken or empty. */
+  protected canSearch(): boolean {
+    return !this.state.broken && this.state.asserts.length > 0;
   }
 
   constructor(private state: AssertsState) {
+    super();
     this.groups = groupBySource(state.asserts);
     this.nav = new SectionNavigator<Assert>(
       this.groups.map((g) => ({ items: g.asserts })),
@@ -353,202 +240,43 @@ export class AssertsPanel {
     });
   }
 
-  // ── Render ─────────────────────────────────────────────────────────
-  // `render` is the single emission point: it always returns header + body +
-  // a blank separator + a hint line.  The individual branches in `bodyLines`
-  // never append the hint themselves, so no mode (empty / confirm / bounded /
-  // unbounded) can forget it — the bug that prompted this structure.
-  render(width: number, terminalHeight?: number): string[] {
-    const hintLines = this.hintLine(width);
-    const body = this.bodyLines(width, terminalHeight, hintLines.length);
-    const rendered = [...body, "", ...hintLines];
-    if (terminalHeight !== undefined && rendered.length > terminalHeight) {
-      return rendered.slice(0, terminalHeight);
-    }
-    return rendered;
-  }
-
-  /** Header + content for the current mode, WITHOUT the trailing hint — that's `render`'s job. */
-  private bodyLines(
-    width: number,
-    terminalHeight: number | undefined,
-    hintLen: number,
-  ): string[] {
-    // Search filtered to zero matches must take precedence over the normal
-    // empty-panel branch: a zero-match view shows "No matches", never
-    // "No asserts defined!".
-    if (this.searchActive && this.groups.length === 0) {
-      return [
-        ...this.renderHeaderLines(),
-        this.renderSearchQueryLine(width),
-        this.theme.fg("warning", "  No matches"),
-      ];
-    }
-
-    if (this.state.asserts.length === 0) {
-      // No asserts at all (fresh install or broken config).  The Presets
-      // section is still rendered (header shown even when empty — the home
-      // for `p`/`n`) so the user has somewhere to land; the message guides them.
-      return [
-        ...this.renderHeaderLines(),
-        this.renderSectionHeader(0),
-        this.theme.fg(
-          "dim",
-          "No asserts defined! Press " +
-            this.theme.fg("accent", "i") + " to install or " +
-            this.theme.fg("accent", "n") + " for a new preset.",
-        ),
-      ];
-    }
-
-    if (this.confirm) {
-      return [
-        ...this.renderHeaderLines(),
-        "",
-        `  Remove "${this.confirm.name}"?`,
-      ];
-    }
-
-    if (terminalHeight === undefined) {
-      return this.renderUnboundedBody(width);
-    }
-
-    // Header (3 lines) and footer (1 blank + hint line(s)) are reserved.
-    // The active section is the anchor; adjacent section headers are always
-    // shown. Detail lines for the selected assert are rendered inline
-    // directly below the highlighted assert row, so the active section's
-    // line budget includes both assert rows and the selected row's details.
-    const headerLines = this.renderHeaderLines();
-    const queryLine = this.searchActive ? this.renderSearchQueryLine(width) : null;
-    const available =
-      terminalHeight - headerLines.length - (queryLine ? 1 : 0) - 1 - hintLen;
-    const focusedSection = this.nav.focusedSection;
-    const activeGroup = this.groups[focusedSection];
-    const activeLen = activeGroup.asserts.length;
-    const selectedAssert = activeGroup.asserts[this.nav.focusedIndex];
-    const detailBlock = selectedAssert
-      ? [
-          ...this.orphanedDetailLines(selectedAssert),
-          ...renderAssertDetail(this.theme, width, selectedAssert),
-        ]
-      : [];
-
-    // Always reserve space for the previous/next section headers and the
-    // separators between them and the active section.
-    const showPrev = focusedSection > 0;
-    const showNext = focusedSection < this.groups.length - 1;
-    const reserved =
-      1 + // active section header
-      (showPrev ? 2 : 0) + // prev header + separator
-      (showNext ? 2 : 0); // next header + separator
-
-    const contentBudget = Math.max(1, available - reserved);
-    let activeVisible = Math.min(
-      activeLen,
-      Math.max(1, contentBudget - detailBlock.length),
-    );
-    const windowed = activeLen > activeVisible;
-    if (windowed) {
-      activeVisible = Math.max(1, activeVisible - 1); // scroll indicator
-    }
-
-    const [start, end] = this.activeWindow(activeVisible);
-
-    let coreLines: string[] = [
-      this.renderSectionHeader(focusedSection),
-      ...this.renderSection(
-        width,
-        activeGroup,
-        true,
-        this.nav.focusedIndex,
-        start,
-        end,
+  // ── Hooks (override SectionedPanel defaults) ──────────────────────
+  // `render`/`bodyLines`/`renderUnboundedBody`/`renderSectionHeader`/
+  // `renderInactiveSectionHeader`/`moveFocus` are all inherited from
+  // `SectionedPanel` — the two panels share one composition path.  These
+  // hooks supply the panel-specific branches that `bodyLines` delegates to.
+  protected emptyBodyLines(_width: number): string[] {
+    // No asserts at all (fresh install or broken config).  The Presets
+    // section is still rendered (header shown even when empty — the home
+    // for `p`/`n`) so the user has somewhere to land; the message guides them.
+    return [
+      ...this.renderHeaderLines(),
+      this.renderSectionHeader(0),
+      this.theme.fg(
+        "dim",
+        "No asserts defined! Press " +
+          this.theme.fg("accent", "i") + " to install or " +
+          this.theme.fg("accent", "n") + " for a new preset.",
       ),
     ];
-
-    if (windowed) {
-      coreLines.push(
-        this.theme.fg(
-          "dim",
-          `  (${this.nav.focusedIndex + 1}/${activeLen})`,
-        ),
-      );
-    }
-
-    // Always show the immediate previous and next section headers.
-    if (showPrev) {
-      coreLines = [
-        this.renderSectionHeader(focusedSection - 1),
-        "",
-        ...coreLines,
-      ];
-    }
-    if (showNext) {
-      coreLines = [
-        ...coreLines,
-        "",
-        this.renderSectionHeader(focusedSection + 1),
-      ];
-    }
-
-    // Add any farther sections that still fit.
-    let lines: string[] = [...coreLines];
-
-    let remaining = available - lines.length;
-    let above = focusedSection - (showPrev ? 2 : 1);
-    let below = focusedSection + (showNext ? 2 : 1);
-
-    let progressed = true;
-    while (
-      remaining > 0 &&
-      (above >= 0 || below < this.groups.length) &&
-      progressed
-    ) {
-      progressed = false;
-      if (above >= 0) {
-        const block = this.renderInactiveSectionHeader(above);
-        if (block.length + 1 <= remaining) {
-          lines = [...block, "", ...lines];
-          remaining -= block.length + 1;
-          above--;
-          progressed = true;
-        }
-      }
-      if (below < this.groups.length) {
-        const block = this.renderInactiveSectionHeader(below);
-        if (block.length + 1 <= remaining) {
-          lines = [...lines, "", ...block];
-          remaining -= block.length + 1;
-          below++;
-          progressed = true;
-        }
-      }
-    }
-
-    return [...headerLines, ...(queryLine ? [queryLine] : []), ...lines];
   }
 
-  private renderUnboundedBody(width: number): string[] {
-    const lines: string[] = [];
-    if (this.searchActive) lines.push(this.renderSearchQueryLine(width));
-    for (let i = 0; i < this.groups.length; i++) {
-      const g = this.groups[i];
-      const isFocused = i === this.nav.focusedSection;
-      lines.push(this.renderSectionHeader(i));
-      lines.push(...this.renderSection(width, g, isFocused, this.nav.focusedIndex));
-      if (i < this.groups.length - 1) lines.push("");
-    }
-    return [...this.renderHeaderLines(), ...lines];
+  protected modeBodyLines(_width: number): string[] | null {
+    if (!this.confirm) return null;
+    return [...this.renderHeaderLines(), "", `  Remove "${this.confirm.name}"?`];
   }
 
-  /** The `/query▏` line shown at the top of the body during search. */
-  private renderSearchQueryLine(width: number): string {
-    const prompt = "/" + this.query;
-    const truncated = truncateToWidth(prompt, Math.max(1, width - 3));
-    return `  ${this.theme.fg("accent", truncated)}▏`;
+  protected detailBlockFor(a: Assert | undefined, width: number): string[] {
+    if (!a) return [];
+    return [
+      ...this.readonlyDetailLines(a),
+      ...this.orphanedDetailLines(a),
+      ...this.danglingDetailLines(a),
+      ...renderAssertDetail(this.theme, width, a),
+    ];
   }
 
-  private renderHeaderLines(): string[] {
+  protected renderHeaderLines(): string[] {
     return [
       this.theme.fg("accent", this.theme.bold("Asserts")),
       this.theme.fg(
@@ -624,44 +352,20 @@ export class AssertsPanel {
     );
   }
 
-  private renderSectionHeader(index: number): string {
-    const group = this.groups[index];
-    const focused = index === this.nav.focusedSection;
-    const header = group.source === "local" ? "Local" : group.source;
-    const color = focused ? "accent" : "muted";
-    const keys = this.sectionNavKeys(index);
-    const keyHint = keys.length
-      ? "  " + keys.map((k) => this.theme.fg("accent", k)).join(this.theme.fg("dim", " · "))
-      : "";
-    return `  ${this.theme.fg(color, header)}${keyHint}`;
-  }
-
   /**
-   * The jump keys that land on `index`, so the section header advertises the
-   * jump in place instead of as a separate hint-line item.  The Presets
-   * section has a dedicated `p` key — always shown (even when focused) so
-   * the jump target is discoverable from any section.  Other sections show
-   * the Tab/Shift+Tab cycle keys: empty for the focused section (already
-   * there) and for sections that aren't a direct cycle target.  With wrap,
-   * the first/last section is reachable from the opposite end, so it carries
-   * the key too.
+   * Adds the `p` jump key for the Presets section (always shown, even when
+   * focused, so the jump target is discoverable from any section) on top of
+   * the base's shared `Tab`/`Shift+Tab` cycle hints.
    */
-  private sectionNavKeys(index: number): string[] {
-    // Presets has a dedicated `p` jump, advertised on its own header.
-    if (this.groups[index].source === PRESETS_SOURCE) return ["p"];
-    const n = this.groups.length;
-    if (n < 2) return [];
-    const focused = this.nav.focusedSection;
-    if (index === focused) return [];
-    const nextTarget = (focused + 1) % n;
-    const prevTarget = (focused - 1 + n) % n;
-    const keys: string[] = [];
-    if (index === nextTarget) keys.push("Tab");
-    if (index === prevTarget) keys.push("Shift+Tab");
+  protected sectionHeaderKeys(index: number): string[] {
+    // `p` jumps to the Presets section (always index 0); the base adds the
+    // shared `Tab`/`Shift+Tab` cycle hints on the sections a cycle lands on.
+    const keys = super.sectionHeaderKeys(index);
+    if (this.groups[index].source === PRESETS_SOURCE) keys.unshift("p");
     return keys;
   }
 
-  private renderSection(
+  protected renderSection(
     width: number,
     group: Group,
     focused: boolean,
@@ -726,6 +430,7 @@ export class AssertsPanel {
       detailFor: (a) =>
         isPreset(a) ? { preset: a.preset } : { shell: a.shell, when: a.when },
       detailPrefix: (a) => [
+        ...this.readonlyDetailLines(a),
         ...this.orphanedDetailLines(a),
         ...this.danglingDetailLines(a),
       ],
@@ -745,21 +450,25 @@ export class AssertsPanel {
     maxLabelWidth: number;
   } {
     const theme = this.theme;
-    const P_BADGE = theme.fg("accent", "P ");
+    // `❄` marks non-local presets as read-only (only local presets are
+    // editable via `e`).  Local presets carry no badge.  `§` (dangling) and
+    // `⚠` (orphaned) still apply to presets of any source.
+    const LOCK_BADGE = theme.fg("dim", "❄ ");
     const DANGLE_BADGE = theme.fg("warning", "§ ");
     const ORPHAN_BADGE = theme.fg("warning", "⚠ ");
-    const P_W = visibleWidth(P_BADGE);
+    const LOCK_W = visibleWidth(LOCK_BADGE);
     const DANGLE_W = visibleWidth(DANGLE_BADGE);
     const ORPHAN_W = visibleWidth(ORPHAN_BADGE);
+    const isLocked = (a: Assert): boolean => isPreset(a) && a.source !== "local";
     const badgeFor = (a: Assert): string => {
       let b = "";
-      if (isPreset(a)) b += P_BADGE;
+      if (isLocked(a)) b += LOCK_BADGE;
       if (this.isDangling(a)) b += DANGLE_BADGE;
       if (this.isOrphaned(a)) b += ORPHAN_BADGE;
       return b;
     };
     const badgeWidth = (a: Assert): number =>
-      (isPreset(a) ? P_W : 0) +
+      (isLocked(a) ? LOCK_W : 0) +
       (this.isDangling(a) ? DANGLE_W : 0) +
       (this.isOrphaned(a) ? ORPHAN_W : 0);
     const maxLabelWidth = Math.max(
@@ -785,6 +494,22 @@ export class AssertsPanel {
   }
 
   /**
+   * Contextual note shown in the detail block under a focused non-local
+   * preset — explains what the `❄` badge means: only local presets are
+   * editable via `e`; a repo preset is read-only.  Guides the user to the
+   * workaround (copy via `n`) since fork-on-edit was removed.  Returns `[]`
+   * for local presets and non-presets so the detail block is unchanged.
+   */
+  private readonlyDetailLines(a: Assert): string[] {
+    if (!isPreset(a) || a.source === "local") return [];
+    return [
+      "    " +
+        this.theme.fg("dim", "❄ ") +
+        this.theme.fg("dim", "non-editable — copy via n to customize"),
+    ];
+  }
+
+  /**
    * Contextual warning line shown in the detail block under a focused preset
    * with one or more dangling refs (`§` badge) — lists the refs that don't
    * resolve to an installed shell assert.  Returns `[]` for non-presets and
@@ -801,34 +526,8 @@ export class AssertsPanel {
     ];
   }
 
-  private renderInactiveSectionHeader(index: number): string[] {
-    return [this.renderSectionHeader(index)];
-  }
-
-  /** Return the [start, end) slice of the active section that stays visible. */
-  private activeWindow(visible: number): [number, number] {
-    const group = this.groups[this.nav.focusedSection];
-    const len = group.asserts.length;
-    if (visible >= len) return [0, len];
-
-    const selected = this.nav.focusedIndex;
-    const half = Math.floor((visible - 1) / 2);
-    let start = selected - half;
-    let end = start + visible;
-
-    if (start < 0) {
-      start = 0;
-      end = visible;
-    }
-    if (end > len) {
-      end = len;
-      start = len - visible;
-    }
-    return [start, end];
-  }
-
   /** The one hint source — confirm-aware so `render`'s tail always emits the right hint. */
-  private hintLine(width?: number): string[] {
+  protected hintLine(width?: number): string[] {
     if (this.confirm) {
       return renderHintLine(this.theme, width, [
         ["y", "confirm"],
@@ -843,7 +542,7 @@ export class AssertsPanel {
       ]);
     }
 
-    const items: [string, string][] = [
+    const items: HintItem[] = [
       HINT_ENTER_ENABLE,
       HINT_T_TOGGLE_DEFAULT,
     ];
@@ -853,6 +552,20 @@ export class AssertsPanel {
     items.push(HINT_R_REMOVE);
     items.push(HINT_I_INSTALL_ASSERTS);
     items.push(HINT_N_NEW_PRESET);
+    // `e` edits presets only — advertise it iff the focused row is a preset,
+    // so the hint never teases an action that doesn't apply to a shell
+    // assert.  A non-local preset is read-only (`❄`): the `e` action is
+    // shown crossed out (disabled) so the user sees it exists but doesn't
+    // apply here, and the detail line explains why.  Pressing `e` anyway
+    // still notifies (defensive).
+    const focused = this.groups[this.nav.focusedSection]?.asserts[this.nav.focusedIndex];
+    if (focused && isPreset(focused)) {
+      items.push(
+        focused.source === "local"
+          ? HINT_E_EDIT_PRESET
+          : ["e", "Edit preset", true],
+      );
+    }
     items.push(HINT_ESC_CANCEL);
     return renderHintLine(this.theme, width, items);
   }
@@ -865,11 +578,19 @@ export class AssertsPanel {
   // definite assignment.
   private _theme!: Theme;
 
+  /**
+   * The extension context for the current `handleInput` call.  Set at the
+   * top of `handleInput` so the shared `toggleFocused()` (parameterless, in
+   * the base) can reach `state.updateStatus(ctx)` without threading `ctx`
+   * through the shared input path.
+   */
+  private _ctx!: ExtensionContext;
+
   setTheme(theme: Theme): void {
     this._theme = theme;
   }
 
-  private get theme(): Theme {
+  protected get theme(): Theme {
     return this._theme;
   }
 
@@ -879,6 +600,8 @@ export class AssertsPanel {
    * close (cancel / install / reload), or `undefined` to keep going.
    */
   handleInput(data: string, ctx: ExtensionContext): PanelAction | undefined {
+    this._ctx = ctx;
+
     // ── Confirmation mode ──
     if (this.confirm) {
       if (matchesKey(data, "y")) {
@@ -897,24 +620,15 @@ export class AssertsPanel {
       return undefined;
     }
 
-    // ── Search mode (fzf-style inline filter) ──
-    // Whitelist navigators + Enter + Tab + Esc + Backspace; everything else
-    // (incl. Space and `r`/`t`/`d`/`i`) feeds the query. `r`/`t`/`d`/`i` are
-    // unreachable until `Esc` exits search.
-    if (this.searchActive) {
-      if (matchesKey(data, Key.escape))    { this.exitSearch(); return undefined; }
-      if (matchesKey(data, "backspace"))   { this.popQuery();   return undefined; }
-      if (matchesKey(data, "enter"))      { this.toggleFocused(ctx); return undefined; }
-      if (matchesKey(data, "up"))         { this.moveFocus("up");   return undefined; }
-      if (matchesKey(data, "down"))       { this.moveFocus("down"); return undefined; }
-      if (matchesKey(data, Key.tab))       { this.nav.cycleSection("next"); return undefined; }
-      if (matchesKey(data, Key.shift("tab"))) { this.nav.cycleSection("prev"); return undefined; }
-      this.appendQuery(data); // filterPrintable inside; no-op for bare controls
-      return undefined;
-    }
+    // ── Search mode (shared with every sectioned panel) ──
+    // Whitelist navigators + Enter + Esc + Backspace; everything else (incl.
+    // Space and `r`/`t`/`d`/`i`) feeds the query.  `r`/`t`/`d`/`i` are
+    // unreachable until `Esc` exits search.  Owned by `SectionedPanel`.
+    if (this.handleSearchInput(data)) return undefined;
 
-    // ── Global hotkeys ──
-    if (matchesKey(data, "/")) { this.enterSearch(); return undefined; }
+    // ── Panel-specific hotkeys (asserts-panel-only) ──
+    // `/` (search), Enter (toggle), Tab/Shift+Tab, arrows are shared and live
+    // in `handleNavInput` at the bottom; `i`/`n`/`p`/Esc are asserts-only.
     if (matchesKey(data, "i")) return "install";
     // `n` opens the new-preset dialog (handled by the command loop).  In
     // confirm mode `n` cancels (confirm is checked first); in search `n`
@@ -993,43 +707,47 @@ export class AssertsPanel {
       return undefined;
     }
 
-    // ── Enter: toggle (Space is no longer a binding — it's a query char in
-    // search mode and resolves to a no-op in normal mode). ──
-    if (matchesKey(data, "enter")) {
-      this.toggleFocused(ctx);
-      return undefined;
+    // ── e: edit focused preset (local presets only) ──
+    // Returns an `edit-preset` action carrying the focused preset; the command
+    // loop runs the two-step editor (`description` → `asserts` panel, the same
+    // sectioned panel as `/asserts`: Tab/Shift+Tab, `Enter` toggles membership,
+    // `Esc` commits + back) and writes the edit in place via `editPresetRule`.
+    // Only local presets are editable.  A non-local preset is read-only (`❄`):
+    // the hint line shows `e Edit preset` crossed out and the detail block
+    // shows `❄ non-editable — copy via n to customize`, so the state is
+    // visible at a glance.  Pressing `e` anyway notifies (defensive).  An
+    // `Esc` with no changes is a no-op (see `editPreset`).  Non-presets
+    // notify instead of acting.
+    if (matchesKey(data, "e")) {
+      const selected = focused.asserts[this.nav.focusedIndex];
+      if (!selected) return undefined;
+      if (!isPreset(selected)) {
+        ctx.ui.notify(
+          "pi-assert: e edits presets only — select a preset first.",
+          "info",
+        );
+        return undefined;
+      }
+      if (selected.source !== "local") {
+        ctx.ui.notify(
+          "pi-assert: only local presets are editable — this preset is read-only (❄).",
+          "info",
+        );
+        return undefined;
+      }
+      return { type: "edit-preset", preset: selected };
     }
 
-    // ── Tab / Shift+Tab: cycle focus between sections (local + repos) ──
-    // A discrete jump that preserves each section's remembered row — Tab
-    // away and Shift+Tab back returns to the same assert.  No-op with a
-    // single section.  `matchesKey("\t", "t")` is false (distinct
-    // codepoints), so Tab never collides with the `t` toggle-default key.
-    if (matchesKey(data, Key.tab)) {
-      this.nav.cycleSection("next");
-      return undefined;
-    }
-    if (matchesKey(data, Key.shift("tab"))) {
-      this.nav.cycleSection("prev");
-      return undefined;
-    }
-
-    // ── Arrows: cross-section first, then within ──
-    if (matchesKey(data, "up"))    { this.moveFocus("up");   return undefined; }
-    if (matchesKey(data, "down"))  { this.moveFocus("down"); return undefined; }
+    // ── Shared navigation (`/` search, Enter toggle, Tab/Shift+Tab cycle,
+    // arrows) — identical to the preset editor's assert picker. ──
+    if (this.handleNavInput(data)) return undefined;
 
     return undefined;
   }
 
-  // ── Shared input helpers (used by both modes) ───────────────────────
-  /** Move focus one step, crossing to the adjacent section at the boundary. */
-  private moveFocus(dir: "up" | "down"): void {
-    if (this.nav.cross(dir)) return;
-    this.nav.moveWithin(dir);
-  }
-
+  // ── Shared input hook ───────────────────────────────────────────────
   /** Toggle the active state of the currently focused assert. */
-  private toggleFocused(ctx: ExtensionContext): void {
+  protected toggleFocused(): void {
     const focused = this.groups[this.nav.focusedSection];
     const selected = focused?.asserts[this.nav.focusedIndex];
     if (!selected) return;
@@ -1037,7 +755,7 @@ export class AssertsPanel {
     else this.state.enable(selected.name);
     this._coverage = null;
     this.state.persist();
-    this.state.updateStatus(ctx);
+    this.state.updateStatus(this._ctx);
   }
 }
 
@@ -1081,6 +799,65 @@ export async function createLocalPreset(
     return;
   }
   ctx.ui.notify(`pi-assert: created preset "${name}".`, "info");
+}
+
+// ---------------------------------------------------------------------------
+// editPreset — `e` edit focused preset.  Two-step editor (Q18: lean two-step
+// to keep `dialogShell` single-purpose): `description` (text) → `asserts`
+// panel (the same sectioned panel as `/asserts`: Tab/Shift+Tab to navigate,
+// `Enter` to toggle membership, `Esc` to commit + go back).
+//
+// Local-only (the `e` handler gates on `source === "local"`; non-local
+// presets are read-only `❄` and never reach here).  Writes `preset` +
+// `description` (+ preserved `default`) in place via `editPresetRule`.
+// Forking a repo preset to local on edit was removed — to customize a repo
+// preset, copy its content into a new local preset via `n`.
+// ---------------------------------------------------------------------------
+async function editPreset(
+  ctx: ExtensionContext,
+  state: AssertsState,
+  preset: PresetAssert,
+): Promise<void> {
+  // Step 1: description (text), seeded with the current description.
+  const description = await textInputDialog(ctx, {
+    title: "Edit preset",
+    label: "Description:",
+    initial: preset.description,
+    hint: [HINT_ENTER_CONFIRM, HINT_ESC_CANCEL],
+  });
+  if (description === null) return; // cancelled — no data loss
+
+  // Step 2: asserts — the same sectioned panel as `/asserts` (sections by
+  // source, fzf-style search, Tab/Shift+Tab navigation).  Only shell asserts
+  // are offered: nested presets are dangling for v1, so a ref to a preset is
+  // excluded from the picker.  `Enter` toggles membership (`✓`), `Esc`
+  // commits + goes back.
+  const result = await runPresetEditor(ctx, state, preset, description);
+
+  // No-op guard: skip the write when nothing actually changed, so opening
+  // the editor and pressing Esc with no edits doesn't rewrite the file.
+  // Membership is compared as a set — the editor can't reorder refs, so a
+  // set-equal result means the user toggled nothing.
+  const sameDesc = description === preset.description;
+  const sameMembers =
+    result.value.length === preset.preset.length &&
+    result.value.every((r) => preset.preset.includes(r));
+  if (sameDesc && sameMembers) return;
+
+  // Write preset + description (+ preserved default) in place to the owning
+  // file's `local` section.
+  try {
+    editPresetRule(
+      preset.path ?? projectFilePath(ctx.cwd),
+      preset.name,
+      description,
+      result.value,
+    );
+  } catch (err) {
+    ctx.ui.notify(`pi-assert: failed to edit preset — ${String(err)}`, "error");
+    return;
+  }
+  ctx.ui.notify(`pi-assert: edited preset "${preset.name}".`, "info");
 }
 
 // ---------------------------------------------------------------------------
@@ -1153,6 +930,11 @@ export function registerAssertsCommand(
         }
         if (action === "create-preset") {
           await createLocalPreset(ctx, state);
+          continue;
+        }
+        if (action !== null && typeof action === "object" &&
+          action.type === "edit-preset") {
+          await editPreset(ctx, state, action.preset);
           continue;
         }
         if (action === "reload") {

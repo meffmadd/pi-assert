@@ -45,6 +45,18 @@ fail user-defined shell checks.
   asserts (installed names removed from their source repo) via an async,
   session-cached `fetchRepoEntries` on panel open, marking them with `⚠` and
   reusing the existing `r` remove flow.
+- **`pi-assert/ui/sectioned-panel.ts`** — `SectionedPanel`, the shared base
+  for the `/asserts` panel and the preset editor's assert picker. Owns the
+  composition (`render`/`bodyLines`/windowing/`renderSectionHeader`/
+  `moveFocus`), the search lifecycle, the section-header `Tab`/`Shift+Tab`
+  jump-key hints, AND the shared input (`handleSearchInput`/`handleNavInput`/
+  `toggleFocused`) so both views are identical except for panel-specific
+  action keys (which live in each subclass `handleInput`).
+- **`pi-assert/ui/preset-editor.ts`** — the preset editor's assert picker
+  (`PresetEditorPanel`, a `SectionedPanel` subclass). Adds only the
+  panel-specific hooks: header, hint, `renderSection` (`✓`/space membership
+  badge), empty-state message, and the one panel-specific key (`Esc` = commit +
+  back). Search, navigation, and toggle are inherited — no parallel path.
 - **`skills/pi-assert/SKILL.md`** — bundled skill describing the format, hooks,
   filters, shell, env vars, and common patterns.
 
@@ -77,12 +89,22 @@ fail user-defined shell checks.
   orphaned asserts (installed name missing from the repo) via a session-cached
   `fetchRepoEntries`. Both degrade silently on network failure.
 - **Prefer one shared implementation over two.** Format parsing, entry
-  validation, the assert run loop, list/dialog rendering, and text
-  measuring/wrapping each live in a single module (`config.ts`, `executor.ts`,
+  validation, the assert run loop, list/dialog rendering, sectioned-panel
+  composition + input, and text measuring/wrapping each live in a single
+  module (`config.ts`, `executor.ts`, `ui/sectioned-panel.ts`,
   `ui/components.ts`, and pi-tui's `visibleWidth`/`wrapTextWithAnsi`
   respectively) that every caller builds on. When adding a new view or hook,
   extend the shared core instead of copying the logic — two copies will
   silently drift.
+- **Sectioned panels share input, not just rendering.** `SectionedPanel`
+  owns the search-mode block and the normal-mode navigation keys
+  (`handleSearchInput`/`handleNavInput`) plus `toggleFocused`; the `/asserts`
+  panel and the preset editor's assert picker are identical except for
+  panel-specific action keys in each subclass `handleInput` (search first via
+  `handleSearchInput`, then panel-specific keys, then `handleNavInput` last).
+  The only keys that differ are the hint line and each panel's own actions
+  (`i`/`n`/`p`/`d`/`r`/`t`/`e`/`Esc`=cancel in `/asserts`; `Esc`=commit in
+  the preset editor).
 - **Highlighting is a render concern, not a filter concern.** Search match
   highlighting recomputes `highlightSegments(query, field)` per visible field
   at render time rather than threading `FuzzyResult.positions` through the
@@ -95,3 +117,16 @@ fail user-defined shell checks.
   pre-styled before the ANSI-aware `wrapTextWithAnsi` so highlights carry
   across wrapped lines. A `score === 0` dead path returns no segments, so a
   field lights up iff it contributed to ranking.
+- **Only local presets are editable; repo presets are read-only.** The `/asserts`
+  panel's `e` action is gated on `source === "local"`; a non-local preset
+  carries a `❄` (snowflake, dim) badge so the read-only state is visible at a
+  glance, and three signals reinforce it when focused: the hint line shows
+  `e Edit preset` **crossed out** (dim + `strikethrough` via the shared
+  `HintItem` disabled flag), the detail block shows a `❄ non-editable — copy
+  via n to customize` note (`readonlyDetailLines`), and pressing `e` anyway
+  notifies (defensive). `editPresetRule` is local-only (writes in place via
+  `updateRule`, preserving the on-disk `default`). Forking a repo preset to
+  local on edit was removed — to customize a repo preset, copy its content
+  into a new local preset via `n`. The `❄`/`§`/`⚠` badges are all
+  text-presentation BMP glyphs (reliable single-width in monospace terminals),
+  not emoji.

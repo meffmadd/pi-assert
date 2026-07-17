@@ -117,6 +117,7 @@ export const HINT_ENTER_UPDATE: [string, string] = ["Enter", "update"];
 export const HINT_ENTER_UNINSTALL: [string, string] = ["Enter", "uninstall"];
 export const HINT_ENTER_CONFIRM: [string, string] = ["Enter", "confirm"];
 export const HINT_ENTER_ENABLE: [string, string] = ["Enter", "enable"];
+export const HINT_ENTER_TOGGLE: [string, string] = ["Enter", "toggle"];
 export const HINT_ESC_CANCEL: [string, string] = ["Esc", "to cancel"];
 export const HINT_ESC_BACK: [string, string] = ["Esc", "back"];
 export const HINT_ESC_EXIT_SEARCH: [string, string] = ["Esc", "exit search"];
@@ -125,14 +126,30 @@ export const HINT_D_DISABLE_ALL: [string, string] = ["d", "Disable all"];
 export const HINT_R_REMOVE: [string, string] = ["r", "Remove"];
 export const HINT_I_INSTALL_ASSERTS: [string, string] = ["i", "Install asserts"];
 export const HINT_N_NEW_PRESET: [string, string] = ["n", "New preset"];
+export const HINT_E_EDIT_PRESET: [string, string] = ["e", "Edit preset"];
+export const HINT_SEARCH: [string, string] = ["/", "search"];
 
-/** Format a single `[key, action]` segment (no indent/separator). */
-function formatHintItem(theme: Theme, item: [string, string]): string {
-  return theme.fg("accent", item[0]) + theme.fg("dim", " " + item[1]);
+/**
+ * A hint segment: a `[key, action]` pair, optionally with a third `disabled`
+ * flag.  A disabled item renders the whole `key action` run dim + struck
+ * through, signalling an action that exists but doesn't apply to the focused
+ * row (e.g. `e Edit preset` on a non-local, read-only preset).  The existing
+ * `HINT_*` constants are `[string, string]` and stay valid — a 2-tuple is a
+ * member of this union.
+ */
+export type HintItem = [string, string] | [string, string, boolean];
+
+/** Format a single hint segment (no indent/separator). */
+function formatHintItem(theme: Theme, item: HintItem): string {
+  const [key, action, disabled] = item;
+  if (disabled) {
+    return theme.strikethrough(theme.fg("dim", `${key} ${action}`));
+  }
+  return theme.fg("accent", key) + theme.fg("dim", " " + action);
 }
 
-/** Format the full hint line from `[key, action]` segments. */
-function formatHint(theme: Theme, items: [string, string][]): string {
+/** Format the full hint line from hint segments. */
+function formatHint(theme: Theme, items: HintItem[]): string {
   const dim = (s: string) => theme.fg("dim", s);
   const indent = dim("  ");
   const separator = dim(" · ");
@@ -147,7 +164,7 @@ function formatHint(theme: Theme, items: [string, string][]): string {
 export function renderHintLine(
   theme: Theme,
   width: number | undefined,
-  items: [string, string][],
+  items: HintItem[],
 ): string[] {
   const single = formatHint(theme, items);
   if (width === undefined || visibleWidth(single) <= width) {
@@ -180,7 +197,7 @@ export function renderHintLine(
 class HintLine implements Component {
   constructor(
     private theme: Theme,
-    private items: [string, string][],
+    private items: HintItem[],
   ) {}
 
   render(width: number): string[] {
@@ -844,4 +861,123 @@ export class SectionNavigator<T> {
     }
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Sectioned-body windowing geometry — pure helpers shared by every
+// sectioned panel (the `/asserts` panel and the preset editor's assert
+// picker) so the two views share one windowing implementation (no drift).
+//
+// The focused section is the anchor: its header + a windowed slice of its
+// rows + the focused row's detail block are always shown.  The immediate
+// prev/next section headers are always shown (with a blank separator each).
+// Farther inactive section headers fill remaining space greedily (above
+// then below, alternating).  All pure: no I/O, no rendering — callers render
+// according to the returned plan.
+// ---------------------------------------------------------------------------
+
+/**
+ * `[start, end)` row window for a section of `len` items with `selected`
+ * focused, showing at most `visible` rows centred on the selection.  Clamps
+ * to the section bounds; returns `[0, len]` when everything fits.
+ */
+function sectionWindow(
+  visible: number,
+  selected: number,
+  len: number,
+): [number, number] {
+  if (visible >= len) return [0, len];
+  const half = Math.floor((visible - 1) / 2);
+  let start = selected - half;
+  let end = start + visible;
+  if (start < 0) {
+    start = 0;
+    end = visible;
+  }
+  if (end > len) {
+    end = len;
+    start = len - visible;
+  }
+  return [start, end];
+}
+
+/** Layout plan for a sectioned body (see {@link layoutSectionedBody}). */
+export interface SectionedLayout {
+  /** `[start, end)` row window for the focused section. */
+  activeWindow: [number, number];
+  /** Whether the focused section needs a `(i/n)` scroll indicator. */
+  windowed: boolean;
+  /** Show the previous section header (`focusedSection > 0`). */
+  showPrev: boolean;
+  /** Show the next section header (`focusedSection < count - 1`). */
+  showNext: boolean;
+  /** Inactive section indices above the focused section, farthest-first. */
+  inactiveAbove: number[];
+  /** Inactive section indices below the focused section, nearest-first. */
+  inactiveBelow: number[];
+}
+
+/**
+ * Compute the viewport plan for a sectioned body with one focused (anchor)
+ * section.  Pure: given the section count, the focused section/index, the
+ * focused section's row count, the focused row's detail-block height, and
+ * the content lines available (header/query/hint already subtracted by the
+ * caller), returns which sections to show and the focused section's row
+ * window.
+ *
+ * `inactiveHeaderHeight` (default 1) is the line count of one inactive
+ * section header; each inactive header costs `inactiveHeaderHeight + 1`
+ * (header + blank separator) lines.
+ */
+export function layoutSectionedBody(opts: {
+  sectionCount: number;
+  focusedSection: number;
+  focusedIndex: number;
+  activeLen: number;
+  detailBlockHeight: number;
+  /** Content lines available (header/query/hint already subtracted). */
+  available: number;
+  /** Lines one inactive section header occupies (default 1). */
+  inactiveHeaderHeight?: number;
+}): SectionedLayout {
+  const inactiveH = opts.inactiveHeaderHeight ?? 1;
+  const { sectionCount, focusedSection, focusedIndex, activeLen, detailBlockHeight, available } = opts;
+
+  const showPrev = focusedSection > 0;
+  const showNext = focusedSection < sectionCount - 1;
+  const reserved = 1 + (showPrev ? 2 : 0) + (showNext ? 2 : 0);
+  const contentBudget = Math.max(1, available - reserved);
+  let activeVisible = Math.min(activeLen, Math.max(1, contentBudget - detailBlockHeight));
+  const windowed = activeLen > activeVisible;
+  if (windowed) activeVisible = Math.max(1, activeVisible - 1);
+
+  const activeWindow = sectionWindow(activeVisible, focusedIndex, activeLen);
+
+  // Greedy fill of inactive section headers around the anchor.  Each costs
+  // `inactiveH + 1` (header + separator); add above then below alternately
+  // while they fit.
+  const coreHeight = reserved + activeVisible + detailBlockHeight + (windowed ? 1 : 0);
+  const stepCost = inactiveH + 1;
+  let remaining = available - coreHeight;
+  let above = focusedSection - (showPrev ? 2 : 1);
+  let below = focusedSection + (showNext ? 2 : 1);
+  const inactiveAbove: number[] = [];
+  const inactiveBelow: number[] = [];
+  let progressed = true;
+  while (remaining > 0 && (above >= 0 || below < sectionCount) && progressed) {
+    progressed = false;
+    if (above >= 0 && stepCost <= remaining) {
+      inactiveAbove.unshift(above); // farthest ends up first (top-down render)
+      remaining -= stepCost;
+      above--;
+      progressed = true;
+    }
+    if (below < sectionCount && stepCost <= remaining) {
+      inactiveBelow.push(below);
+      remaining -= stepCost;
+      below++;
+      progressed = true;
+    }
+  }
+  return { activeWindow, windowed, showPrev, showNext, inactiveAbove, inactiveBelow };
 }
