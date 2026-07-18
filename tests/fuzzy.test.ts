@@ -38,6 +38,22 @@ function makeAssert(
   };
 }
 
+/** Build a `PresetAssert` (a `preset`-ref bundle) for `filterSection` tests. */
+function makePreset(
+  name: string,
+  refs: string[] = [],
+  opts: { source?: string; description?: string } = {},
+): Assert {
+  return {
+    name,
+    source: opts.source ?? "local",
+    description: opts.description ?? "",
+    preset: refs,
+    default: false,
+    path: `/tmp/${name}.json`,
+  };
+}
+
 // ── fuzzyMatch ─────────────────────────────────────────────────────
 
 describe("fuzzyMatch", () => {
@@ -322,5 +338,105 @@ describe("filterSection", () => {
     const b = makeAssert("no-secrets");
     const out = filterSection("zzz", [a, b]);
     assert.equal(out.length, 0);
+  });
+});
+
+// ── preset field (coerce) ─────────────────────────────────────────────
+//
+// A preset's `preset` refs are a string array; `filterSection` coerces them
+// to a `", "`-joined string (matching `renderAssertDetail`'s `asserts:`
+// join, so highlight positions align with the rank) at the same tier as
+// `shell`/`when`.  These cover the coerce path and its tier dominance.
+
+describe("filterSection — preset field", () => {
+  it("matches a preset via its `preset` refs (coerced to a joined string)", () => {
+    const p = makePreset("my-preset", [
+      "local/block-rm-rf",
+      "meffmadd/pi-assert-rules/protect-env",
+    ]);
+    const out = filterSection("protect-env", [p]);
+    assert.equal(out.length, 1);
+    assert.equal(out[0]!.assert, p);
+  });
+
+  it("matches a ref that appears after the join separator", () => {
+    // The coerce joins with `", "`; a ref in the second position must still be
+    // reachable (the comma+space is just a gap in the subsequence).
+    const p = makePreset("p", ["local/foo", "local/bar"]);
+    const out = filterSection("bar", [p]);
+    assert.equal(out.length, 1);
+    assert.equal(out[0]!.assert, p);
+  });
+
+  it("tier dominance: name outranks preset", () => {
+    // 'env-preset' matches in name (tier 40 000); 'other' only via a preset
+    // ref (tier 10 000). Name wins.
+    const nameMatch = makePreset("env-preset", ["local/x"]);
+    const presetMatch = makePreset("other", ["local/env-guard"]);
+    const out = filterSection("env", [nameMatch, presetMatch]);
+    assert.equal(out[0]!.assert, nameMatch,
+      "name (tier 40 000) outranks preset (tier 10 000)");
+  });
+
+  it("tier dominance: preset ranks alongside shell/when (same tier, fuzz breaks ties)", () => {
+    // Both match only via their tier-10 000 body field: a preset ref vs a
+    // shell string. A tight contiguous ref match outranks a scattered shell
+    // match at the same tier (fuzz decides), confirming preset is tier 10 000,
+    // not a higher tier.
+    const preset = makePreset("p", ["local/env-guard"]);          // contiguous
+    const shell = makeAssert("s", { shell: "e" + "x".repeat(20) + "nv" }); // scattered
+    const out = filterSection("env", [preset, shell]);
+    assert.equal(out[0]!.assert, preset,
+      "preset is tier 10 000 — a tighter ref fuzz beats a scattered shell fuzz");
+  });
+
+  it("an empty preset array does not match on the preset field", () => {
+    // No refs → coerce yields "" → preset field contributes nothing. The
+    // preset still matches via its name.
+    const p = makePreset("zzz", []);
+    const out = filterSection("zzz", [p]);
+    assert.equal(out.length, 1);
+    assert.equal(out[0]!.assert, p);
+  });
+
+  it("a preset whose refs don't contain the query is excluded", () => {
+    const p = makePreset("p", ["local/foo"]);
+    const out = filterSection("bar", [p]);
+    assert.equal(out.length, 0);
+  });
+
+  it("shell asserts are unaffected (preset field is undefined → coerce yields \"\")", () => {
+    // A ShellAssert has no `preset`; the coerce returns "" for undefined so
+    // the preset field never contributes for a shell assert.
+    const a = makeAssert("write-guard", { shell: "echo hi" });
+    const out = filterSection("hi", [a]);
+    assert.equal(out.length, 1);
+    assert.equal(out[0]!.assert, a);
+  });
+});
+
+// ── highlightSegments — joined preset refs ─────────────────────────────
+//
+// `highlightSegments` is pure: it highlights across whatever string it's
+// given. `renderAssertDetail` feeds it a preset's refs joined with `", "`
+// (the same separator `filterSection`'s coerce uses), so a ref after the
+// comma is highlighted. These lock in that the joined string is searchable
+// end-to-end.
+
+describe("highlightSegments — joined preset refs", () => {
+  it("highlights a ref that sits after the ', ' join separator", () => {
+    const joined = ["local/foo", "owner/repo/bar"].join(", ");
+    const segs = highlightSegments("bar", joined)!;
+    assert.ok(segs, "the joined ref string is searchable");
+    assert.equal(segs.map((s) => s.text).join(""), joined);
+    assert.ok(
+      segs.some((s) => s.matched && s.text === "bar"),
+      "the ref after the comma is a highlighted run",
+    );
+  });
+
+  it("returns null when the query is not a subsequence of any ref", () => {
+    const joined = ["local/foo", "owner/repo/bar"].join(", ");
+    assert.equal(highlightSegments("zzz", joined), null);
   });
 });

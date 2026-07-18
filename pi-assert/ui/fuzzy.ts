@@ -191,13 +191,29 @@ export function highlightSegments(query: string, target: string): Segment[] | nu
   return segs;
 }
 
-/** Per-field scorer config: which `Assert` field, and its dominance tier. */
-const FIELDS: { field: keyof ShellAssert | keyof PresetAssert; tier: number }[] = [
+/**
+ * Per-field scorer config: which `Assert` field, its dominance tier, and an
+ * optional `coerce` that turns a non-string field value into the string
+ * `matchQuery` ranks on.  Without `coerce` the value is used only when it's
+ * already a non-empty string.  `coerce`'s output must match the string the
+ * renderer feeds `highlightSegments` so a highlight aligns with the rank —
+ * `renderAssertDetail` joins a preset's refs with the same `", "`.
+ */
+const FIELDS: {
+  field: keyof ShellAssert | keyof PresetAssert;
+  tier: number;
+  coerce?: (v: unknown) => string;
+}[] = [
   { field: "name", tier: 40_000 },
   { field: "description", tier: 30_000 },
   { field: "source", tier: 20_000 },
   { field: "shell", tier: 10_000 },
   { field: "when", tier: 10_000 },
+  // A preset's `preset` refs are a string array; `coerce` joins them (with
+  // `", "`, matching `renderAssertDetail`'s `asserts:` join) so a search for a
+  // ref name surfaces the preset that references it.  Same tier as
+  // `shell`/`when` — it's the preset's body text.
+  { field: "preset", tier: 10_000, coerce: (v) => (Array.isArray(v) ? v.join(", ") : "") },
 ];
 
 export interface SectionMatch {
@@ -219,7 +235,10 @@ export interface SectionMatch {
  * far below the 10 000 tier gap). A field whose greedy path scored 0
  * (gap penalties ate all its bonus — a very scattered, low-quality hit)
  * contributes nothing: it is skipped so the assert can only rank via a
- * genuinely-matching field, or drop out entirely.
+ * genuinely-matching field, or drop out entirely.  A field with a `coerce`
+ * (e.g. a preset's `preset` array) is joined into the string `matchQuery`
+ * ranks on — the same `", "` join `renderAssertDetail` highlights — so a
+ * search for a ref name surfaces the preset referencing it.
  */
 export function filterSection(query: string, asserts: Assert[]): SectionMatch[] {
   const stripped = query.replace(/\s+/g, "");
@@ -234,9 +253,10 @@ export function filterSection(query: string, asserts: Assert[]): SectionMatch[] 
   for (let i = 0; i < asserts.length; i++) {
     const a = asserts[i]!;
     let best: { score: number; positions: number[] } | null = null;
-    for (const { field, tier } of FIELDS) {
-      const value = (a as unknown as Record<string, unknown>)[field];
-      if (typeof value !== "string" || value.length === 0) continue;
+    for (const { field, tier, coerce } of FIELDS) {
+      const raw = (a as unknown as Record<string, unknown>)[field];
+      const value = coerce ? coerce(raw) : typeof raw === "string" ? raw : "";
+      if (value.length === 0) continue;
       const m = matchQuery(stripped, value);
       if (!m || m.score === 0) continue;   // 0-clamp: dead path = no field match
       const score = tier + m.score;

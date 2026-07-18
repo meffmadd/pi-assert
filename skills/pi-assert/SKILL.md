@@ -53,6 +53,50 @@ VS Code and other editors will then provide:
 | `shell`   | yes      | Shell command string. Pipes, redirects, `&&`, `||` all work — runs through a real shell. Exit 0 → allow; non-zero → block (or warn, for session_shutdown). |
 | `default` | no       | If `true`, this assert is active by default for new sessions. Defaults to `false` (inactive until manually enabled via `/asserts`). |
 
+## Presets
+
+A **preset** is a named bundle of asserts. Instead of `hook`/`filter`/`shell`, a
+preset entry holds a `preset` array of assert references. Activating a preset
+activates every assert it references (deduped); the preset itself never runs a
+shell command. Presets install from a rules repo like normal asserts and are
+editable in the `/asserts` panel.
+
+```json
+{
+  "my-preset": {
+    "description": "Block all destructive writes",
+    "preset": ["local/block-rm-rf", "meffmadd/pi-assert-rules/protect-env"],
+    "default": false
+  }
+}
+```
+
+### Preset fields
+
+| Field          | Required | Description |
+|----------------|----------|-------------|
+| `description`  | yes      | Human-readable summary (shown in the panel). |
+| `preset`       | yes      | `string[]` of qualified `"source/name"` refs: `local/name` (2 segments) or `owner/repo/name` (3 segments). An empty array is valid (an `n`-created preset starts at `preset: []`). |
+| `default`      | no       | If `true`, the preset is active by default — which activates its members *through* the preset (members' own `default` is untouched). |
+
+`preset` is mutually exclusive with `hook`/`shell`/`filter`/`when` — an entry
+is either an assert or a preset, never both. A preset referencing another
+preset, or a ref whose `source/name` isn't installed, is a **dangling ref**: it
+contributes nothing at runtime (the preset just expands to fewer asserts) and is
+marked `§` in the panel.
+
+### Runtime
+
+- The preset never reaches the executor; it expands to its referenced shell
+  asserts when building the active list.
+- Members are deduped by `source/name` — an assert active individually **and**
+  via a preset runs once.
+- Installing a preset **cascades**: each referenced member is installed too
+  (local refs are skipped — they aren't in a repo; a missing local member just
+  dangles `§`).
+- Removing a preset is single-entry: the preset is removed, its members stay
+  installed.
+
 ## Environment Variables
 
 ### tool_call hooks
@@ -139,7 +183,9 @@ both the badge and the hintline reflect the focused entry's state:
 uninstall. The `default` flag is a local-only preference — it's excluded from
 the content comparison, so an update never clobbers your `default` toggle.
 Updates write to the owning file (project override or global), preserving the
-on-disk `default`.
+on-disk `default`. Installing a **preset** also installs each of its
+referenced members (cascade); removing a preset is single-entry (members stay
+installed). See [Presets](#presets).
 
 **Orphaned asserts.** The `/asserts` panel fetches each repo's entries (cached
 per session) and marks installed asserts whose name no longer exists upstream
@@ -374,6 +420,35 @@ with wraparound (last wraps to first). It's a discrete jump that preserves
 each section's remembered row — Tab away and Shift+Tab back lands you on
 the same assert. The hint only appears when more than one section exists.
 
+## Presets in the `/asserts` panel
+
+Presets are hoisted to an always-present **Presets** section at the top of the
+panel (the header shows even when empty). The panel-specific keys:
+
+| Key | Action |
+|-----|--------|
+| `p` | Jump to the first row of the Presets section (or its header if empty). |
+| `n` | Create a new local preset (prompts for a name, starts at `preset: []`). Warns instead of overwriting if the name already exists locally. |
+| `e` | Edit the focused preset's `description` and member refs. **Local presets only** — a repo preset is read-only (`❄`); copy it via `n` to customize. |
+
+`t` (toggle `default`), `r` (remove), `Enter` (enable/disable), and `d`
+(disable all) work on presets by entry name like any other entry.
+
+### Badges
+
+Badges render left of the label, outside the accent wrap so their colour holds
+on the selected row:
+
+| Badge | Meaning |
+|-------|---------|
+| `P`  | Preset (always on a preset entry). |
+| `§`  | Dangling ref — the preset references a `source/name` that isn't installed. Synchronous (no network). |
+| `⚠`  | Orphaned — the installed assert's name no longer exists in its source repo (async repo fetch). |
+| `❄`  | Read-only — a non-local (repo) preset that can't be edited via `e`. |
+
+`§` and `⚠` can co-occur; `P` is always present on a preset. A preset's detail
+block lists any dangling refs (like the orphaned `⚠` list).
+
 ## Fuzzy search
 
 In the `/asserts` panel, press `/` to enter fuzzy-search mode and narrow the
@@ -381,8 +456,10 @@ list by typing. Matching is fuzzy subsequence, ranked best-first **within each
 section** — sections are preserved, non-matching rows hide within their
 section, and empty sections disappear entirely. Spaces in the query are
 ignored for matching, so `no env` still matches `no-env`. Matched
-characters are highlighted inline — in the name within each row, and in
-the `shell`/`when` detail block under the focused row.
+characters are highlighted inline — in the name within each row, and in the
+`shell`/`when` (or `asserts:` for a preset) detail block under the focused row.
+A preset's `preset` refs are searchable too: typing a ref name surfaces the
+preset that references it.
 
 While search is active: `↑`/`Down` move through the filtered matches
 (crossing to the next non-empty section at the boundaries), `Enter` toggles
