@@ -22,8 +22,8 @@
  * + `renderSection` + `layoutSectionedBody` windowing.
  */
 
-import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
+import { Key, matchesKey, truncateToWidth, type KeyId } from "@earendil-works/pi-tui";
 
 import type { Assert } from "../engine.js";
 import {
@@ -31,6 +31,7 @@ import {
   filterPrintable,
   layoutSectionedBody,
   renderAssertDetail,
+  fitLines,
 } from "./components.js";
 import { filterSection } from "./fuzzy.js";
 
@@ -84,6 +85,11 @@ export abstract class SectionedPanel {
   protected query = "";
   protected savedGroups: Group[] | null = null;
   protected savedNav: SectionNavigator<Assert> | null = null;
+  protected keybindings?: KeybindingsManager;
+
+  setKeybindings(keybindings: KeybindingsManager): void {
+    this.keybindings = keybindings;
+  }
 
   /** Whether search state is currently exposed (used by tests). */
   get isSearchActive(): boolean { return this.searchActive; }
@@ -174,11 +180,28 @@ export abstract class SectionedPanel {
   render(width: number, terminalHeight?: number): string[] {
     const hintLines = this.hintLine(width);
     const body = this.bodyLines(width, terminalHeight, hintLines.length);
-    const rendered = [...body, "", ...hintLines];
+    let rendered = [...body, "", ...hintLines];
     if (terminalHeight !== undefined && rendered.length > terminalHeight) {
-      return rendered.slice(0, terminalHeight);
+      // Preserve the bottom hint instead of slicing it away when a long
+      // detail block exceeds the vertical budget.
+      const footer = ["", ...hintLines];
+      const bodyBudget = Math.max(0, terminalHeight - footer.length);
+      const compactBody = [...body];
+      // Blank separators are decorative; remove them before sacrificing a
+      // section header, selected row, or the fixed bottom hint.
+      while (compactBody.length > bodyBudget) {
+        const blank = compactBody.lastIndexOf("");
+        if (blank < 0) break;
+        compactBody.splice(blank, 1);
+      }
+      // The muted count subtitle is next least important; retain the title.
+      if (compactBody.length > bodyBudget && compactBody.length > 1) {
+        compactBody.splice(1, 1);
+      }
+      rendered = [...compactBody.slice(0, bodyBudget), ...footer]
+        .slice(0, terminalHeight);
     }
-    return rendered;
+    return fitLines(rendered, width);
   }
 
   /** Header + content for the current mode, WITHOUT the trailing hint. */
@@ -327,11 +350,11 @@ export abstract class SectionedPanel {
    */
   protected handleSearchInput(data: string): boolean {
     if (!this.searchActive) return false;
-    if (matchesKey(data, Key.escape))         { this.exitSearch(); return true; }
+    if (this.matchesSelect(data, "tui.select.cancel", Key.escape)) { this.exitSearch(); return true; }
     if (matchesKey(data, "backspace"))        { this.popQuery();   return true; }
-    if (matchesKey(data, "enter"))            { this.toggleFocused(); return true; }
-    if (matchesKey(data, "up"))               { this.moveFocus("up");   return true; }
-    if (matchesKey(data, "down"))             { this.moveFocus("down"); return true; }
+    if (this.matchesSelect(data, "tui.select.confirm", "enter")) { this.toggleFocused(); return true; }
+    if (this.matchesSelect(data, "tui.select.up", "up"))         { this.moveFocus("up");   return true; }
+    if (this.matchesSelect(data, "tui.select.down", "down"))     { this.moveFocus("down"); return true; }
     if (matchesKey(data, Key.tab))             { this.nav.cycleSection("next"); return true; }
     if (matchesKey(data, Key.shift("tab")))    { this.nav.cycleSection("prev"); return true; }
     this.appendQuery(data); // filterPrintable inside; no-op for bare controls
@@ -346,12 +369,26 @@ export abstract class SectionedPanel {
    */
   protected handleNavInput(data: string): boolean {
     if (matchesKey(data, "/"))              { this.enterSearch(); return true; }
-    if (matchesKey(data, "enter"))         { this.toggleFocused(); return true; }
+    if (this.matchesSelect(data, "tui.select.confirm", "enter")) { this.toggleFocused(); return true; }
     if (matchesKey(data, Key.tab))          { this.nav.cycleSection("next"); return true; }
     if (matchesKey(data, Key.shift("tab"))) { this.nav.cycleSection("prev"); return true; }
-    if (matchesKey(data, "up"))             { this.moveFocus("up");   return true; }
-    if (matchesKey(data, "down"))           { this.moveFocus("down"); return true; }
+    if (this.matchesSelect(data, "tui.select.up", "up"))         { this.moveFocus("up");   return true; }
+    if (this.matchesSelect(data, "tui.select.down", "down"))     { this.moveFocus("down"); return true; }
     return false;
+  }
+
+  protected matchesCancel(data: string): boolean {
+    return this.matchesSelect(data, "tui.select.cancel", Key.escape);
+  }
+
+  private matchesSelect(
+    data: string,
+    id: "tui.select.up" | "tui.select.down" | "tui.select.confirm" | "tui.select.cancel",
+    fallback: KeyId,
+  ): boolean {
+    return typeof this.keybindings?.matches === "function"
+      ? this.keybindings.matches(data, id)
+      : matchesKey(data, fallback);
   }
 
   // ── Search lifecycle ───────────────────────────────────────────────

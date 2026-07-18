@@ -6,7 +6,7 @@ import {
   type Assert,
   type LoadError,
 } from "../engine.js";
-import { entryKey } from "../config.js";
+import { AssertIndex, entryKey, parseEntryRef } from "../domain/entry.js";
 
 // ---------------------------------------------------------------------------
 // Preset resolution — shared by active execution and panel coverage.
@@ -14,13 +14,11 @@ import { entryKey } from "../config.js";
 /** Resolve one level of a preset to installed shell asserts, in ref order. */
 export function resolvePresetMembers(asserts: Assert[], preset: Assert): Assert[] {
   if (!isPreset(preset)) return [];
-  const byKey = new Map(asserts.map((a) => [entryKey(a.source, a.name), a]));
+  const index = new AssertIndex(asserts);
   const members: Assert[] = [];
   for (const ref of preset.preset) {
-    const idx = ref.lastIndexOf("/");
-    const member = idx >= 0
-      ? byKey.get(entryKey(ref.slice(0, idx), ref.slice(idx + 1)))
-      : undefined;
+    const parsed = parseEntryRef(ref);
+    const member = parsed ? index.get(parsed.source, parsed.name) : undefined;
     if (member && !isPreset(member)) members.push(member);
   }
   return members;
@@ -44,6 +42,9 @@ export class AssertsState {
   /** Per-file parse errors from the most recent `load()`. Empty when healthy. */
   loadErrors: LoadError[] = [];
 
+  /** Whether project-local config and writes are allowed in this session. */
+  projectTrusted = true;
+
   constructor(private pi: ExtensionAPI) {}
 
   // ── Loading ────────────────────────────────────────────────────────
@@ -55,9 +56,10 @@ export class AssertsState {
    * extension must not apply any asserts in that state.  Non-parse errors
    * (e.g. unexpected runtime issues) are re-thrown.
    */
-  load(cwd: string): void {
+  load(cwd: string, projectTrusted = true): void {
+    this.projectTrusted = projectTrusted;
     try {
-      this.asserts = loadAsserts(cwd);
+      this.asserts = loadAsserts(cwd, projectTrusted);
       this.broken = false;
       this.loadErrors = [];
     } catch (err) {
@@ -116,8 +118,8 @@ export class AssertsState {
   private resolveKey(value: Assert | string): string {
     if (typeof value !== "string") return this.keyOf(value);
     if (value.includes("\x00")) return value;
-    const matches = this.asserts.filter((a) => a.name === value);
-    return matches.length === 1 ? this.keyOf(matches[0]!) : value;
+    const match = new AssertIndex(this.asserts).resolveLegacyName(value);
+    return match ? this.keyOf(match) : value;
   }
 
   /** Persist the current active set to the session branch. */
@@ -151,11 +153,12 @@ export class AssertsState {
       // Saved v2 entries are source-qualified. Explicitly migrate old bare
       // names only when they identify exactly one loaded entry; ambiguous old
       // entries are dropped rather than enabling every collision.
-      const valid = new Set(this.asserts.map((a) => this.keyOf(a)));
+      const index = new AssertIndex(this.asserts);
+      const valid = new Set(index.byKey.keys());
       const migrated = saved.flatMap((value) => {
         if (value.includes("\x00")) return valid.has(value) ? [value] : [];
-        const matches = this.asserts.filter((a) => a.name === value);
-        return matches.length === 1 ? [this.keyOf(matches[0]!)] : [];
+        const match = index.resolveLegacyName(value);
+        return match ? [this.keyOf(match)] : [];
       });
       this.active = new Set(migrated);
     } else {

@@ -2,10 +2,10 @@ import { type ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-c
 import {
   Container,
   matchesKey,
-  Key,
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { isPreset, type Assert, type PresetAssert } from "../engine.js";
+import { entryKey, entryRef } from "../domain/entry.js";
 import {
   fetchRepoEntries,
   installRule,
@@ -70,7 +70,7 @@ function buildPresetCoverage(
   for (const a of asserts) {
     if (!isActive(a) || !isPreset(a)) continue;
     for (const member of resolvePresetMembers(asserts, a)) {
-      const key = `${member.source}\x00${member.name}`;
+      const key = entryKey(member.source, member.name);
       const list = coverage.get(key) ?? [];
       list.push(a.name);
       coverage.set(key, list);
@@ -130,7 +130,7 @@ export class AssertsPanel extends SectionedPanel {
       this._byRef = new Map(
         this.state.asserts
           .filter((a) => !isPreset(a))
-          .map((a) => [`${a.source}/${a.name}`, a]),
+          .map((a) => [entryRef(a.source, a.name), a]),
       );
     }
     return this._byRef;
@@ -159,7 +159,7 @@ export class AssertsPanel extends SectionedPanel {
 
   /** `true` iff `a` was removed from its source repo (`⚠` badge, async). */
   private isOrphaned(a: Assert): boolean {
-    return this.orphaned.has(`${a.source}\0${a.name}`);
+    return this.orphaned.has(entryKey(a.source, a.name));
   }
 
   /** Re-render trigger, set by the caller so async fetch resolution can flip badges in. */
@@ -223,7 +223,7 @@ export class AssertsPanel extends SectionedPanel {
         const [repo, entries] = result;
         for (const a of this.state.asserts) {
           if (a.source === repo && !entries.has(a.name)) {
-            orphaned.add(`${a.source}\0${a.name}`);
+            orphaned.add(entryKey(a.source, a.name));
           }
         }
       }
@@ -246,9 +246,11 @@ export class AssertsPanel extends SectionedPanel {
       this.renderSectionHeader(0),
       this.theme.fg(
         "dim",
-        "No asserts defined! Press " +
-          this.theme.fg("accent", "i") + " to install or " +
-          this.theme.fg("accent", "n") + " for a new preset.",
+        this.state.broken
+          ? "Configuration is invalid; fix asserts.json to continue."
+          : "No rules defined! Press " +
+            this.theme.fg("accent", "i") + " to install or " +
+            this.theme.fg("accent", "n") + " for a new preset.",
       ),
     ];
   }
@@ -273,7 +275,7 @@ export class AssertsPanel extends SectionedPanel {
       this.theme.fg("accent", this.theme.bold("Asserts")),
       this.theme.fg(
         "muted",
-        `${this.state.active.size}/${this.state.asserts.length} active`,
+        `${this.state.active.size}/${this.state.asserts.length} enabled`,
       ),
       "",
     ];
@@ -308,7 +310,7 @@ export class AssertsPanel extends SectionedPanel {
     if (this.activeFor(a)) {
       return this.theme.fg("accent", "enabled");
     }
-    const via = this.coverage.get(`${a.source}\x00${a.name}`);
+    const via = this.coverage.get(entryKey(a.source, a.name));
     if (via && via.length > 0) {
       const label = via.length === 1
         ? `via ${via[0]}`
@@ -379,7 +381,7 @@ export class AssertsPanel extends SectionedPanel {
       const accent = (s: string) => this.theme.fg("accent", s);
       for (const a of group.asserts) {
         const badge = badgeFor(a);
-        const labelW = this.plainLabel(a).length + badgeWidth(a);
+        const labelW = visibleWidth(this.plainLabel(a)) + badgeWidth(a);
         const padding = " ".repeat(Math.max(0, maxLabelWidth - labelW));
         const status = this.renderStatus(a);
         lines.push(
@@ -413,7 +415,7 @@ export class AssertsPanel extends SectionedPanel {
       highlightQuery: this.searchActive ? this.query : undefined,
       renderRow: (a, selected) => {
         const badge = badgeFor(a);
-        const labelW = this.plainLabel(a).length + badgeWidth(a);
+        const labelW = visibleWidth(this.plainLabel(a)) + badgeWidth(a);
         const padding = " ".repeat(Math.max(0, maxLabelWidth - labelW));
         const base = selected
           ? (s: string) => theme.fg("accent", s)
@@ -471,7 +473,7 @@ export class AssertsPanel extends SectionedPanel {
       (this.isOrphaned(a) ? ORPHAN_W : 0);
     const maxLabelWidth = Math.max(
       0,
-      ...group.asserts.map((a) => this.plainLabel(a).length + badgeWidth(a)),
+      ...group.asserts.map((a) => visibleWidth(this.plainLabel(a)) + badgeWidth(a)),
     );
     return { badgeFor, badgeWidth, maxLabelWidth };
   }
@@ -503,7 +505,7 @@ export class AssertsPanel extends SectionedPanel {
     return [
       "    " +
         this.theme.fg("dim", "❄ ") +
-        this.theme.fg("dim", "non-editable — copy via n to customize"),
+        this.theme.fg("dim", "non-editable — cannot copy via n; n creates an empty preset"),
     ];
   }
 
@@ -530,14 +532,14 @@ export class AssertsPanel extends SectionedPanel {
       return renderHintLine(this.theme, width, [
         ["y", "confirm"],
         ["n", "cancel"],
-      ]);
+      ], this.keybindings);
     }
 
     if (this.searchActive) {
       return renderHintLine(this.theme, width, [
         HINT_ENTER_ENABLE,
         HINT_ESC_EXIT_SEARCH,
-      ]);
+      ], this.keybindings);
     }
 
     const items: HintItem[] = [
@@ -565,7 +567,7 @@ export class AssertsPanel extends SectionedPanel {
       );
     }
     items.push(HINT_ESC_CANCEL);
-    return renderHintLine(this.theme, width, items);
+    return renderHintLine(this.theme, width, items, this.keybindings);
   }
 
   // ── Theme access ───────────────────────────────────────────────────
@@ -609,7 +611,22 @@ export class AssertsPanel extends SectionedPanel {
           this.confirm = null;
           return undefined;
         }
-        removeRuleAt(path, source, name);
+        let removed: boolean;
+        try {
+          removed = removeRuleAt(path, source, name);
+        } catch (err) {
+          ctx.ui.notify(
+            `pi-assert: failed to remove "${name}" — ${String(err)}`,
+            "error",
+          );
+          this.confirm = null;
+          return undefined;
+        }
+        if (!removed) {
+          ctx.ui.notify(`pi-assert: "${name}" was not found on disk.`, "warning");
+          this.confirm = null;
+          return undefined;
+        }
         const selected = this.state.asserts.find((a) =>
           a.source === source && a.name === name && a.path === path,
         );
@@ -619,7 +636,7 @@ export class AssertsPanel extends SectionedPanel {
         this.confirm = null;
         return "reload";
       }
-      if (matchesKey(data, "n") || matchesKey(data, Key.escape)) {
+      if (matchesKey(data, "n") || this.matchesCancel(data)) {
         this.confirm = null;
         return undefined;
       }
@@ -636,6 +653,10 @@ export class AssertsPanel extends SectionedPanel {
     // `/` (search), Enter (toggle), Tab/Shift+Tab, arrows are shared and live
     // in `handleNavInput` at the bottom; `i`/`n`/`p`/Esc are asserts-only.
     if (matchesKey(data, "i")) {
+      if (this.state.projectTrusted === false) {
+        ctx.ui.notify("pi-assert: trust this project before installing rules.", "error");
+        return undefined;
+      }
       if (this.state.broken) {
         ctx.ui.notify("pi-assert: fix asserts.json before installing rules.", "error");
         return undefined;
@@ -647,6 +668,10 @@ export class AssertsPanel extends SectionedPanel {
     // feeds the query (search is checked first) — so this branch is only
     // reached in normal mode.
     if (matchesKey(data, "n")) {
+      if (this.state.projectTrusted === false) {
+        ctx.ui.notify("pi-assert: trust this project before creating a preset.", "error");
+        return undefined;
+      }
       if (this.state.broken) {
         ctx.ui.notify("pi-assert: fix asserts.json before creating a preset.", "error");
         return undefined;
@@ -660,7 +685,7 @@ export class AssertsPanel extends SectionedPanel {
       this.nav.selection[0] = 0;
       return undefined;
     }
-    if (matchesKey(data, Key.escape)) return "cancel";
+    if (this.matchesCancel(data)) return "cancel";
 
     const focused = this.groups[this.nav.focusedSection];
     if (!focused) return undefined;
@@ -844,6 +869,7 @@ async function editPreset(
     title: "Edit preset",
     label: "Description:",
     initial: preset.description,
+    allowEmpty: true,
     hint: [HINT_ENTER_CONFIRM, HINT_ESC_CANCEL],
   });
   if (description === null) return; // cancelled — no data loss
@@ -896,7 +922,13 @@ export function registerAssertsCommand(
       // after `install` and `reload` actions so freshly installed /
       // removed asserts are immediately toggleable.
       while (true) {
-        state.load(ctx.cwd);
+        const trustAware = ctx as ExtensionContext & {
+          isProjectTrusted?: () => boolean;
+        };
+        state.load(
+          ctx.cwd,
+          trustAware.isProjectTrusted?.() ?? state.projectTrusted,
+        );
         // Prune stale active entries that no longer exist
         const validKeys = new Set(state.asserts.map((a) => state.keyOf(a)));
         for (const key of Array.from(state.active)) {
@@ -905,9 +937,10 @@ export function registerAssertsCommand(
         state.updateStatus(ctx);
 
         const action = await ctx.ui.custom<PanelAction | null>(
-          (tui, theme, _kb, done) => {
+          (tui, theme, kb, done) => {
             const panel = new AssertsPanel(state);
             panel.setTheme(theme);
+            panel.setKeybindings(kb);
             // Wire the re-render trigger so the async orphaned-check can
             // flip `⚠` badges in when `fetchRepoEntries` settles.
             panel.setRequestRender(() => tui.requestRender());

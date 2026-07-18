@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { SelectItem } from "@earendil-works/pi-tui";
+import type { PersistedEntry } from "./domain/entry.js";
 import {
   projectFilePath,
   readSectionedFile,
@@ -12,27 +13,8 @@ import {
 // Types
 // ---------------------------------------------------------------------------
 
-/** A single assert entry in a rules/*.json file from a pi-assert-rules repo. */
-interface RuleAssert {
-  /** Human-readable description shown in the install TUI and persisted on install. */
-  description: string;
-  hook: string;
-  filter?: Record<string, unknown>;
-  when?: string;
-  shell: string;
-  default?: boolean;
-}
-
-/** A single preset entry in a rules/*.json file from a pi-assert-rules repo. */
-interface RulePreset {
-  /** Human-readable description shown in the install TUI and persisted on install. */
-  description: string;
-  preset: string[];
-  default?: boolean;
-}
-
-/** A single entry in a rules/*.json file from a pi-assert-rules repo (assert or preset). */
-export type RuleEntry = RuleAssert | RulePreset;
+/** A schema-valid entry from a rules repository. */
+export type RuleEntry = PersistedEntry;
 
 /** Top-level shape of a rules/*.json file. */
 export type RuleEntries = Record<string, RuleEntry>;
@@ -164,9 +146,9 @@ export async function fetchRuleFile(
   for (const [name, def] of Object.entries(parsed as Record<string, unknown>)) {
     const kind = validateRuleEntry(def);
     if (kind?.kind === "assert") {
-      entries[name] = def as RuleAssert;
+      entries[name] = def as PersistedEntry;
     } else if (kind?.kind === "preset") {
-      entries[name] = def as RulePreset;
+      entries[name] = def as PersistedEntry;
     }
   }
 
@@ -215,15 +197,28 @@ export function fetchRepoEntries(
 
   cached = (async () => {
     const files = await fetchRuleFiles(repo, ref);
-    const entries = new Map<string, RuleEntry>();
-    await Promise.all(
-      files.map(async (f) => {
-        const fileEntries = await fetchRuleFile(repo, f.path, ref);
-        for (const [name, entry] of Object.entries(fileEntries)) {
-          entries.set(name, entry);
-        }
-      }),
+    // Fetch concurrently, then merge in sorted file order. Mutating one map
+    // from racing requests made duplicate-name resolution nondeterministic.
+    const results = await Promise.all(
+      files.map(async (file) => ({
+        file,
+        entries: await fetchRuleFile(repo, file.path, ref),
+      })),
     );
+    const entries = new Map<string, RuleEntry>();
+    const origins = new Map<string, string>();
+    for (const result of results) {
+      for (const [name, entry] of Object.entries(result.entries)) {
+        const previous = origins.get(name);
+        if (previous) {
+          throw new Error(
+            `Duplicate rule name "${name}" in ${repo}: ${previous} and ${result.file.path}`,
+          );
+        }
+        origins.set(name, result.file.path);
+        entries.set(name, entry);
+      }
+    }
     return entries;
   })().catch((err) => {
     // Evict on failure so the next open retries instead of caching the error.

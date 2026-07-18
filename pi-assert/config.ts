@@ -1,5 +1,12 @@
 import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
+import * as PiCodingAgent from "@earendil-works/pi-coding-agent";
+import type {
+  PersistedAssert,
+  PersistedPreset,
+} from "./domain/entry.js";
+
+export { entryKey } from "./domain/entry.js";
 
 // ---------------------------------------------------------------------------
 // On-disk shape of a sectioned asserts.json file (project or global).
@@ -33,9 +40,24 @@ export interface SectionedSection {
   entries: Record<string, unknown>;
 }
 
-/** Resolve the project `.pi/asserts.json` path for a given cwd. */
+/** Pi's configured project directory name (normally `.pi`). */
+export function configDirName(): string {
+  // CONFIG_DIR_NAME is present in current Pi. The derived fallback supports
+  // older Pi releases without baking the default directory into this package.
+  const config = PiCodingAgent as typeof PiCodingAgent & {
+    CONFIG_DIR_NAME?: string;
+  };
+  return config.CONFIG_DIR_NAME ?? basename(dirname(config.getAgentDir()));
+}
+
+/** Resolve the project config path for a given cwd. */
 export function projectFilePath(cwd: string): string {
-  return join(cwd, ".pi", "asserts.json");
+  return join(cwd, configDirName(), "asserts.json");
+}
+
+/** Resolve the user-level config path. */
+export function globalFilePath(): string {
+  return join(dirname(PiCodingAgent.getAgentDir()), "asserts.json");
 }
 
 /**
@@ -43,9 +65,8 @@ export function projectFilePath(cwd: string): string {
  *
  * Returns `{}` when the file is missing.  **Throws** when the file exists
  * but cannot be parsed as a JSON object — the runtime loader relies on
- * that throw to surface per-file parse errors.  Best-effort callers
- * (the installer's install/remove/default writes) wrap this in a
- * try/catch to fall back to `{}`.
+ * that throw to surface per-file parse errors. Mutation callers also let
+ * the error propagate so malformed user bytes are never replaced.
  */
 export function readSectionedFile(path: string): SectionedFile {
   if (!existsSync(path)) return {};
@@ -129,14 +150,7 @@ export function iterSections(
  * `description` is required everywhere: on-disk entries need it for the
  * /asserts panel, and rule-repo entries use it to drive the install picker.
  */
-export interface EntryFields {
-  description: string;
-  hook: "tool_call" | "tool_result" | "agent_end";
-  filter?: Record<string, string | number | boolean | null | (string | number | boolean | null)[]>;
-  when?: string;
-  shell: string;
-  default?: boolean;
-}
+export type EntryFields = PersistedAssert;
 
 const ASSERT_KEYS = new Set(["description", "hook", "filter", "when", "shell", "default"]);
 const PRESET_KEYS = new Set(["description", "preset", "default"]);
@@ -199,11 +213,7 @@ export const REF_RE =
   /^local\/[A-Za-z0-9._-]+$|^(?!local\/)[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 
 /** Fields of a preset entry, on disk or in a rules repo. */
-export interface PresetFields {
-  description: string;
-  preset: string[];
-  default?: boolean;
-}
+export type PresetFields = PersistedPreset;
 
 /**
  * Type guard for a preset entry's shape.
@@ -243,11 +253,6 @@ export type RuleEntryKind = { kind: "assert" } | { kind: "preset" };
  * stays `unknown` to the caller — the installer uses the tag to dispatch and
  * re-validates with the individual guard where it needs `def` narrowed.
  */
-/** Canonical identity for an entry. Names are only unique within a source. */
-export function entryKey(source: string, name: string): string {
-  return `${source}\x00${name}`;
-}
-
 export function validateRuleEntry(def: unknown): RuleEntryKind | null {
   if (validatePresetShape(def)) return { kind: "preset" };
   if (validateEntryShape(def)) return { kind: "assert" };

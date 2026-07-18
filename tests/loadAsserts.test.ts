@@ -945,6 +945,23 @@ describe("loadAsserts", () => {
     });
   }
 
+  it("can load only trusted global rules while ignoring project config", () => {
+    clearGlobal();
+    makeGlobal({
+      local: {
+        global: { description: "global", hook: "tool_call", shell: "true" },
+      },
+    });
+    const cwd = setupCwd(10_000, {
+      local: {
+        project: { description: "project", hook: "tool_call", shell: "false" },
+      },
+    });
+
+    const loaded = loadAsserts(cwd, false);
+    assert.deepStrictEqual(loaded.map((entry) => entry.name), ["global"]);
+  });
+
   // ── Standalone: malformed JSON throws ────────────────────────────
 
   it("malformed project JSON → throws AssertsParseError pointing at project file", () => {

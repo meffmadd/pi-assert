@@ -6,8 +6,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { renderAssertDetail, renderDetailList, DetailList } from "../pi-assert/ui/components.js";
-import type { SelectItem } from "@earendil-works/pi-tui";
+import {
+  renderAssertDetail,
+  renderDetailList,
+  renderHintLine,
+  DetailList,
+} from "../pi-assert/ui/components.js";
+import { visibleWidth, type SelectItem } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
 function mockTheme(): Theme {
@@ -17,6 +22,25 @@ function mockTheme(): Theme {
     bold: (text: string) => text,
   } as unknown as Theme;
 }
+
+describe("width contract", () => {
+  it("keeps detail and arbitrarily wrapped hint lines within narrow widths", () => {
+    const width = 12;
+    const lines = [
+      ...renderAssertDetail(mockTheme(), width, {
+        shell: "echo 世界世界世界世界世界",
+        when: "test -f a-very-long-file-name",
+      }),
+      ...renderHintLine(mockTheme(), width, [
+        ["Enter", "select something long"],
+        ["Esc", "cancel"],
+        ["/", "search"],
+      ]),
+    ];
+    assert.ok(lines.length > 2, "narrow hints can wrap to more than two lines");
+    assert.ok(lines.every((line) => visibleWidth(line) <= width));
+  });
+});
 
 describe("renderAssertDetail — preset branch", () => {
   it("renders the asserts: label with comma-joined refs", () => {

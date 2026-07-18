@@ -524,6 +524,26 @@ describe("fetchRepoEntries", () => {
     });
   });
 
+  it("rejects duplicate names across files deterministically", async () => {
+    clearRepoEntriesCache();
+    mockMultiFileFetch(
+      ["rules/b.json", "rules/a.json"],
+      {
+        "rules/a.json": {
+          duplicate: { description: "A.", hook: "tool_call", shell: "true" },
+        },
+        "rules/b.json": {
+          duplicate: { description: "B.", hook: "tool_call", shell: "false" },
+        },
+      },
+    );
+
+    await assert.rejects(
+      () => fetchRepoEntries("duplicate/repo"),
+      /Duplicate rule name "duplicate".*rules\/a\.json.*rules\/b\.json/,
+    );
+  });
+
   it("returns an empty map for a repo with no rule files", async () => {
     clearRepoEntriesCache();
     mockTreesFetch([]);

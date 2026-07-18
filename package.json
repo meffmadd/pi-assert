@@ -30,7 +30,7 @@
     "lint": "eslint .",
     "pretest": "npm run typecheck && npm run lint",
     "test": "node --import tsx --test tests/*.test.ts",
-    "check": "npm run typecheck && npm run lint && npm test"
+    "check": "npm test"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

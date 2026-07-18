@@ -559,6 +559,28 @@ describe("e2e: orchestration", () => {
 
   // 5.9 ── Signal propagation ──────────────────────────────────────
 
+  it("when execution failures report the when command, not the main shell", async () => {
+    const cwd = setupConfig("e2e-when-abort-diagnostic", {
+      diagnostic: {
+        description: "d",
+        hook: "tool_call",
+        when: "echo precondition",
+        shell: "echo main-command",
+      },
+    });
+    const controller = new AbortController();
+    controller.abort();
+    const result = await runAsserts(
+      loadAsserts(cwd),
+      { toolName: "bash", toolCallId: "when-abort", input: {} },
+      { cwd, signal: controller.signal },
+    );
+
+    assert.ok(result?.reason.includes("during when"));
+    assert.ok(result?.reason.includes("echo precondition"));
+    assert.ok(!result?.reason.includes("echo main-command"));
+  });
+
   it("ctx.signal aborts shell → blocked", async () => {
     const cwd = setupConfig("e2e-signal", {
       "slow-check": {

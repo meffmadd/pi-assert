@@ -1,7 +1,6 @@
 import { exec } from "node:child_process";
 import { existsSync, mkdirSync, appendFileSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import {
   iterSections,
@@ -10,8 +9,11 @@ import {
   validatePresetShape,
   validateSectionedFile,
   entryKey,
+  globalFilePath,
+  projectFilePath,
   type SectionedFile,
 } from "./config.js";
+import type { EntryFilter, Hook } from "./domain/entry.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -47,7 +49,7 @@ interface AssertBase {
 /** A shell-based assert: `shell` (+ optional `when`/`filter`) run on a hook. */
 export interface ShellAssert extends AssertBase {
   /** Pi event name to intercept (e.g. "tool_call"). */
-  hook: string;
+  hook: Hook;
   /**
    * Optional key-value filter matched against the hook's candidate record
    * (for tool_call/tool_result: `{ toolName, ...event.input }`; for
@@ -56,7 +58,7 @@ export interface ShellAssert extends AssertBase {
    * (the candidate value matches if it `===` equals any element).  An empty
    * array matches nothing.
    */
-  filter?: Record<string, unknown>;
+  filter?: EntryFilter;
   /** Optional precondition shell command. Only runs the main `shell` if this exits 0. */
   when?: string;
   /** Shell command string whose exit code decides pass/fail. */
@@ -194,7 +196,7 @@ export class AssertsParseError extends Error {
  * are returned in that case — callers must treat the error as a
  * hard-fail and not apply partial results.
  */
-export function loadAsserts(cwd: string): Assert[] {
+export function loadAsserts(cwd: string, includeProject = true): Assert[] {
   // The merge map is keyed by `${source}\x00${name}` and the value carries
   // the path of the file that produced it.  Project reads come second, so
   // `merged.set(key, …)` naturally overwrites any global entry for the
@@ -203,9 +205,9 @@ export function loadAsserts(cwd: string): Assert[] {
   const errors: LoadError[] = [];
 
   // Read repos from project file to build known set (also applies to global)
-  const projectPath = join(cwd, ".pi", "asserts.json");
+  const projectPath = projectFilePath(cwd);
   let knownRepos: Set<string> | undefined;
-  if (existsSync(projectPath)) {
+  if (includeProject && existsSync(projectPath)) {
     try {
       const file = readSectionedFile(projectPath);
       if (Array.isArray(file.repos)) {
@@ -222,7 +224,7 @@ export function loadAsserts(cwd: string): Assert[] {
   }
 
   // 1. Global
-  const globalPath = join(homedir(), ".pi", "asserts.json");
+  const globalPath = globalFilePath();
   if (existsSync(globalPath)) {
     try {
       for (const entry of readSections(globalPath, knownRepos)) {
@@ -238,7 +240,7 @@ export function loadAsserts(cwd: string): Assert[] {
   }
 
   // 2. Project (overrides global by source+name)
-  if (existsSync(projectPath)) {
+  if (includeProject && existsSync(projectPath)) {
     try {
       for (const entry of readSections(projectPath, knownRepos)) {
         merged.set(keyOf(entry), entry);
@@ -393,7 +395,7 @@ function logEnv(
   if (process.env.PIASSERT_LOG_ENV?.toLowerCase() !== "true") return;
 
   try {
-    const dir = join(homedir(), ".pi", ".assert-env-log");
+    const dir = join(dirname(globalFilePath()), ".assert-env-log");
     const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
     const file = join(dir, `${today}.jsonl`);
     const record = JSON.stringify({

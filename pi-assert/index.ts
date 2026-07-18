@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { AssertsState } from "./ui/state.js";
 import { registerAssertsCommand } from "./ui/asserts.js";
 import { clearRepoEntriesCache } from "./installer.js";
@@ -11,6 +11,12 @@ import {
 } from "./executor.js";
 import type { AgentEndEvent, ToolResultEvent } from "./engine.js";
 
+function projectIsTrusted(ctx: ExtensionContext): boolean {
+  const trustAware = ctx as ExtensionContext & { isProjectTrusted?: () => boolean };
+  // Fail closed when running against a Pi build too old to expose trust.
+  return trustAware.isProjectTrusted?.() ?? false;
+}
+
 // ---------------------------------------------------------------------------
 // pi-assert extension entry point.
 //
@@ -20,12 +26,15 @@ import type { AgentEndEvent, ToolResultEvent } from "./engine.js";
 // ---------------------------------------------------------------------------
 export default function (pi: ExtensionAPI) {
   const state = new AssertsState(pi);
+  let lastAgentEndFailure: string | null = null;
+  let promptRuns: RunRecord[] = [];
 
   // ── Load asserts on session start ─────────────────────────────────
   pi.on("session_start", (_event, ctx) => {
     // The repo-entry cache is intentionally scoped to a Pi session.
     clearRepoEntriesCache();
-    state.load(ctx.cwd);
+    lastAgentEndFailure = null;
+    state.load(ctx.cwd, projectIsTrusted(ctx));
 
     // Hard-fail: if either asserts.json file failed to parse, do NOT restore
     // any active set, do NOT install any asserts, and tell the user.
@@ -47,10 +56,14 @@ export default function (pi: ExtensionAPI) {
 
     if (state.asserts.length > 0) {
       ctx.ui.notify(
-        `pi-assert: ${state.asserts.length} assert${state.asserts.length === 1 ? "" : "s"} loaded (${state.active.size} active)`,
+        `pi-assert: ${state.asserts.length} rule${state.asserts.length === 1 ? "" : "s"} loaded (${state.active.size} enabled)`,
         "info",
       );
     }
+  });
+
+  pi.on("agent_start", () => {
+    promptRuns = [];
   });
 
   // ── Restore state when navigating the session tree ────────────────
@@ -64,22 +77,14 @@ export default function (pi: ExtensionAPI) {
 
   // ── Intercept tool calls ──────────────────────────────────────────
   pi.on("tool_call", async (event, ctx) => {
-    const runs: RunRecord[] = [];
     const result = await executeToolCallAsserts(
       state.activeList(),
       event,
       ctx,
       (record) => {
-        runs.push(record);
+        promptRuns.push(record);
       },
     );
-
-    // Informational runtime summary — a transient TUI toast, kept separate
-    // from the failure path. Emitted before the block return so a blocked
-    // call still surfaces that the assert ran.
-    if (runs.length > 0 && ctx.hasUI) {
-      ctx.ui.notify(formatRunReport(runs), "info");
-    }
 
     if (result) {
       if (ctx.hasUI) {
@@ -92,19 +97,14 @@ export default function (pi: ExtensionAPI) {
   // ── Intercept tool results (patch content on failure) ─────────────
   pi.on("tool_result", async (event, ctx) => {
     const resultEvent = event as unknown as ToolResultEvent;
-    const runs: RunRecord[] = [];
     const result = await executeToolResultAsserts(
       state.activeList(),
       resultEvent,
       ctx,
       (record) => {
-        runs.push(record);
+        promptRuns.push(record);
       },
     );
-
-    if (runs.length > 0 && ctx.hasUI) {
-      ctx.ui.notify(formatRunReport(runs), "info");
-    }
 
     if (result) {
       if (ctx.hasUI) {
@@ -117,43 +117,50 @@ export default function (pi: ExtensionAPI) {
   // ── Agent-end asserts ─────────────────────────────────────────────
   pi.on("agent_end", async (event, ctx) => {
     const agentEndEvent = event as unknown as AgentEndEvent;
-    // executeAgentEndAsserts returns the failures (string[]); agent_end
-    // runs reach the local `runs` array via the onRun callback.
-    const runs: RunRecord[] = [];
     const failures = await executeAgentEndAsserts(
       state.activeList(),
       agentEndEvent,
       ctx,
       (record) => {
-        runs.push(record);
+        promptRuns.push(record);
       },
     );
 
-    // Informational runtime summary — a transient TUI toast, emitted
-    // before the failure message so the guard layer is visible regardless
-    // of whether asserts passed or failed. `executeAgentEndAsserts`
-    // short-circuits on abort (returns [] without running anything), so
-    // `runs` is empty on abort and no toast is emitted.
-    if (runs.length > 0 && ctx.hasUI) {
-      ctx.ui.notify(formatRunReport(runs), "info");
+    // One quiet per-prompt summary instead of a toast for every tool hook.
+    if (promptRuns.length > 0 && ctx.hasUI) {
+      ctx.ui.notify(formatRunReport(promptRuns), "info");
     }
 
-    // Failure path — a non-empty failure list emits a custom message WITH
-    // triggerTurn so the agent addresses them. The failures are surfaced in
-    // the message itself, so no separate toast is needed.
-    if (failures.length > 0) {
-      const body =
-        `${failures.length} assertion${failures.length === 1 ? "" : "s"} failed after your last turn:\n\n` +
-        failures.join("\n");
-
-      pi.sendMessage(
-        {
-          customType: "pi-assert",
-          content: body,
-          display: true,
-        },
-        { triggerTurn: true },
-      );
+    // Trigger one corrective turn for a given failure set. If that turn ends
+    // with the same failures, stop retrying and require user intervention.
+    if (failures.length === 0) {
+      lastAgentEndFailure = null;
+      return;
     }
+
+    const fingerprint = failures.join("\n");
+    if (fingerprint === lastAgentEndFailure) {
+      if (ctx.hasUI) {
+        ctx.ui.notify(
+          "pi-assert: agent-end assertions still fail; automatic retry stopped.",
+          "error",
+        );
+      }
+      return;
+    }
+    lastAgentEndFailure = fingerprint;
+
+    const body =
+      `${failures.length} assertion${failures.length === 1 ? "" : "s"} failed after your last turn:\n\n` +
+      failures.join("\n");
+
+    pi.sendMessage(
+      {
+        customType: "pi-assert",
+        content: body,
+        display: true,
+      },
+      { triggerTurn: true },
+    );
   });
 }

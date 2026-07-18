@@ -14,6 +14,8 @@ fail user-defined shell checks.
 - **`pi-assert/engine.ts`** — config loading (`loadAsserts`), filter matching
   (`matchFilter`), environment builder (`buildEnv`), and shell execution
   (`evaluateShell` via `child_process.exec`).
+- **`pi-assert/domain/entry.ts`** — shared persisted entry types, canonical
+  source/name identity and ref parsing, plus `AssertIndex` lookups.
 - **`pi-assert/config.ts`** — single owner of the on-disk `asserts.json`
   format: `readSectionedFile`/`writeSectionedFile`, section identification
   (`iterSections`), and entry-shape validation (`validateEntryShape`). Shared

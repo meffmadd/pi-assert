@@ -11,7 +11,7 @@
     },
     "local": {
       "type": "object",
-      "description": "User-defined asserts and presets. Cannot be removed from the /asserts UI.",
+      "description": "User-defined assertions and presets. Removable via the /asserts UI.",
       "additionalProperties": {
         "$ref": "#/$defs/entry"
       }

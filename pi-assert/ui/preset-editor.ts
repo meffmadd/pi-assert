@@ -20,15 +20,13 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   Container,
-  matchesKey,
-  Key,
   visibleWidth,
 } from "@earendil-works/pi-tui";
 
 import { isPreset, type Assert, type PresetAssert } from "../engine.js";
 import {
   HINT_ENTER_TOGGLE,
-  HINT_ESC_BACK,
+  HINT_ESC_SAVE_BACK,
   HINT_ESC_EXIT_SEARCH,
   HINT_SEARCH,
   OverlayBox,
@@ -141,13 +139,13 @@ export class PresetEditorPanel extends SectionedPanel {
       return renderHintLine(this.theme, width, [
         HINT_ENTER_TOGGLE,
         HINT_ESC_EXIT_SEARCH,
-      ]);
+      ], this.keybindings);
     }
     return renderHintLine(this.theme, width, [
       HINT_ENTER_TOGGLE,
       HINT_SEARCH,
-      HINT_ESC_BACK,
-    ]);
+      HINT_ESC_SAVE_BACK,
+    ], this.keybindings);
   }
 
   protected renderSection(
@@ -166,7 +164,7 @@ export class PresetEditorPanel extends SectionedPanel {
     // Label width = name + check badge (1), so the description column aligns.
     const maxLabelWidth = Math.max(
       0,
-      ...group.asserts.map((a) => a.name.length + CHECK_W),
+      ...group.asserts.map((a) => visibleWidth(a.name) + CHECK_W),
     );
 
     if (!focused) {
@@ -177,7 +175,7 @@ export class PresetEditorPanel extends SectionedPanel {
       const lines: string[] = [];
       for (const a of group.asserts) {
         const badge = this.selected.has(this.refOf(a)) ? CHECK : EMPTY;
-        const labelW = a.name.length + CHECK_W;
+        const labelW = visibleWidth(a.name) + CHECK_W;
         const padding = " ".repeat(Math.max(0, maxLabelWidth - labelW));
         const descText = a.description ? muted(a.description) : "";
         lines.push(`   ${badge} ${muted(a.name)}${padding}  ${descText}`);
@@ -194,7 +192,7 @@ export class PresetEditorPanel extends SectionedPanel {
       renderRow: (a, selected) => {
         const isMember = this.selected.has(this.refOf(a));
         const badge = isMember ? CHECK : EMPTY;
-        const labelW = a.name.length + CHECK_W;
+        const labelW = visibleWidth(a.name) + CHECK_W;
         const padding = " ".repeat(Math.max(0, maxLabelWidth - labelW));
         const base = selected
           ? (s: string) => theme.fg("accent", s)
@@ -241,7 +239,7 @@ export class PresetEditorPanel extends SectionedPanel {
     // panel-specific key is `Esc`, which commits the working selection and
     // goes back (vs. `/asserts`, where `Esc` cancels).
     if (this.handleSearchInput(data)) return undefined;
-    if (matchesKey(data, Key.escape)) return this.commit();
+    if (this.matchesCancel(data)) return this.commit();
     if (this.handleNavInput(data)) return undefined;
     return undefined;
   }
@@ -274,9 +272,10 @@ export async function runPresetEditor(
   const shellAsserts = state.asserts.filter((a) => !isPreset(a));
   const initial = new Set(preset.preset);
 
-  return ctx.ui.custom<PresetEditorResult>((tui, theme, _kb, done) => {
+  return ctx.ui.custom<PresetEditorResult>((tui, theme, kb, done) => {
     const panel = new PresetEditorPanel(shellAsserts, preset.name, description, initial);
     panel.setTheme(theme);
+    panel.setKeybindings(kb);
 
     const panelHeight = Math.max(10, Math.floor(tui.terminal.rows * 0.8) - 2);
 

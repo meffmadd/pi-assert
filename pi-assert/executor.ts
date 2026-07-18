@@ -35,6 +35,12 @@ import {
 // ---------------------------------------------------------------------------
 type FailDecision<T> = "continue" | { value: T };
 
+export interface AssertFailure {
+  phase: "when" | "shell";
+  command: string;
+  result: ShellResult;
+}
+
 /**
  * A record of a single assert whose `shell` actually executed (filter
  * matched + `when` passed/absent). `when`-failed asserts are NOT recorded —
@@ -42,8 +48,7 @@ type FailDecision<T> = "continue" | { value: T };
  *
  * Used by `runAsserts`'s `onRun` side-channel to report runtime visibility
  * (which asserts ran and how long each took) without changing its return
- * type. The accumulator in `index.ts` collects these per prompt and emits a
- * single informational summary at `agent_end`.
+ * type. `index.ts` collects these across hooks and reports once per prompt.
  */
 export interface RunRecord {
   /** Assert name (for display). */
@@ -67,7 +72,7 @@ async function runAsserts<Evt, T>(
     hook: string;
     candidate: Record<string, unknown>;
     buildEnv: (event: Evt, ctx: ExtensionContext) => Record<string, string>;
-    onFail: (assert: ShellAssert, result: ShellResult) => FailDecision<T>;
+    onFail: (assert: ShellAssert, failure: AssertFailure) => FailDecision<T>;
     /** Called once per assert whose main `shell` executed, with its run record. */
     onRun?: (record: RunRecord) => void;
   },
@@ -87,7 +92,11 @@ async function runAsserts<Evt, T>(
       // Non-zero means "not applicable"; null means timeout, abort, or a
       // spawn failure and must not bypass a guard.
       if (precondition.code === null) {
-        const decision = opts.onFail(assert, precondition);
+        const decision = opts.onFail(assert, {
+          phase: "when",
+          command: assert.when,
+          result: precondition,
+        });
         if (decision !== "continue") return decision.value;
         continue;
       }
@@ -105,7 +114,11 @@ async function runAsserts<Evt, T>(
     });
 
     if (!result.passed) {
-      const decision = opts.onFail(assert, result);
+      const decision = opts.onFail(assert, {
+        phase: "shell",
+        command: assert.shell,
+        result,
+      });
       if (decision !== "continue") return decision.value;
     }
   }
@@ -127,10 +140,12 @@ export async function executeToolCallAsserts(
     hook: "tool_call",
     candidate: { ...event.input, toolName: event.toolName },
     buildEnv: buildEnv,
-    onFail: (assert) => ({
+    onFail: (assert, failure) => ({
       value: {
         block: true,
-        reason: `pi-assert: assertion "${assert.name}" rejected ${event.toolName} — \`${assert.shell}\``,
+        reason: failure.phase === "shell"
+          ? `pi-assert: assertion "${assert.name}" rejected ${event.toolName} — \`${failure.command}\``
+          : `pi-assert: assertion "${assert.name}" rejected ${event.toolName} during when — \`${failure.command}\``,
       },
     }),
     onRun,
@@ -155,14 +170,18 @@ export async function executeToolResultAsserts(
     hook: "tool_result",
     candidate: { ...event.input, toolName: event.toolName },
     buildEnv: buildResultEnv,
-    onFail: (assert) => ({
+    onFail: (assert, failure) => ({
       value: {
-        reason: `pi-assert: assertion "${assert.name}" blocked ${event.toolName} result — \`${assert.shell}\``,
+        reason: failure.phase === "shell"
+          ? `pi-assert: assertion "${assert.name}" blocked ${event.toolName} result — \`${failure.command}\``
+          : `pi-assert: assertion "${assert.name}" blocked ${event.toolName} result during when — \`${failure.command}\``,
         patch: {
           content: [
             {
               type: "text",
-              text: `[BLOCKED by pi-assert] pi-assert: assertion "${assert.name}" blocked ${event.toolName} result — \`${assert.shell}\`\n\nThe original tool result was suppressed.`,
+              text: failure.phase === "shell"
+                ? `[BLOCKED by pi-assert] pi-assert: assertion "${assert.name}" blocked ${event.toolName} result — \`${failure.command}\`\n\nThe original tool result was suppressed.`
+                : `[BLOCKED by pi-assert] pi-assert: assertion "${assert.name}" blocked ${event.toolName} result during when — \`${failure.command}\`\n\nThe original tool result was suppressed.`,
             },
           ],
           // Pass through details (when defined) so the patch is a complete
@@ -199,9 +218,11 @@ export async function executeAgentEndAsserts(
     hook: "agent_end",
     candidate: { event: "agent_end" },
     buildEnv: buildAgentEndEnv,
-    onFail: (assert, result) => {
+    onFail: (assert, failure) => {
       failures.push(
-        `- **${assert.name}**: \`${assert.shell}\` (exit ${result.code})`,
+        failure.phase === "shell"
+          ? `- **${assert.name}**: \`${failure.command}\` (exit ${failure.result.code})`
+          : `- **${assert.name}** (when): \`${failure.command}\` (exit ${failure.result.code})`,
       );
       return "continue";
     },

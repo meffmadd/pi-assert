@@ -1,4 +1,8 @@
-import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionContext,
+  KeybindingsManager,
+  Theme,
+} from "@earendil-works/pi-coding-agent";
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import {
   Box,
@@ -6,10 +10,12 @@ import {
   Container,
   matchesKey,
   Key,
+  Input,
   Text,
   truncateToWidth,
   visibleWidth,
   wrapTextWithAnsi,
+  type KeyId,
   type SelectItem,
   type SizeValue,
 } from "@earendil-works/pi-tui";
@@ -18,6 +24,17 @@ import { highlightSegments } from "./fuzzy.js";
 // ---------------------------------------------------------------------------
 // Shared text helpers
 // ---------------------------------------------------------------------------
+
+function bindingMatches(
+  keybindings: KeybindingsManager | undefined,
+  data: string,
+  id: "tui.select.up" | "tui.select.down" | "tui.select.confirm" | "tui.select.cancel",
+  fallback: KeyId,
+): boolean {
+  return typeof keybindings?.matches === "function"
+    ? keybindings.matches(data, id)
+    : matchesKey(data, fallback);
+}
 
 // Text measurement and wrapping come from pi-tui (`visibleWidth`,
 // `wrapTextWithAnsi`) so the whole project uses one ANSI-aware, wide-char
@@ -93,12 +110,12 @@ export function renderAssertDetail(
   // type-safe encoding of that invariant (no `!` needed).
   if (entry.preset !== undefined) {
     detailLines(entry.preset.join(", "), "asserts: ");
-    return lines;
+    return fitLines(lines, width);
   }
   if (entry.shell !== undefined) detailLines(entry.shell, "shell: ");
   if (entry.when) detailLines(entry.when, "when: ");
 
-  return lines;
+  return fitLines(lines, width);
 }
 
 // ---------------------------------------------------------------------------
@@ -114,17 +131,18 @@ export const HINT_ENTER_SELECT: [string, string] = ["Enter", "select"];
 export const HINT_ENTER_OPEN: [string, string] = ["Enter", "open"];
 export const HINT_ENTER_INSTALL: [string, string] = ["Enter", "install"];
 export const HINT_ENTER_UPDATE: [string, string] = ["Enter", "update"];
-export const HINT_ENTER_UNINSTALL: [string, string] = ["Enter", "uninstall"];
+export const HINT_ENTER_UNINSTALL: [string, string] = ["Enter", "remove"];
 export const HINT_ENTER_CONFIRM: [string, string] = ["Enter", "confirm"];
-export const HINT_ENTER_ENABLE: [string, string] = ["Enter", "enable"];
+export const HINT_ENTER_ENABLE: [string, string] = ["Enter", "toggle"];
 export const HINT_ENTER_TOGGLE: [string, string] = ["Enter", "toggle"];
-export const HINT_ESC_CANCEL: [string, string] = ["Esc", "to cancel"];
+export const HINT_ESC_CANCEL: [string, string] = ["Esc", "cancel"];
 export const HINT_ESC_BACK: [string, string] = ["Esc", "back"];
+export const HINT_ESC_SAVE_BACK: [string, string] = ["Esc", "save & back"];
 export const HINT_ESC_EXIT_SEARCH: [string, string] = ["Esc", "exit search"];
 export const HINT_T_TOGGLE_DEFAULT: [string, string] = ["t", "Toggle default"];
 export const HINT_D_DISABLE_ALL: [string, string] = ["d", "Disable all"];
 export const HINT_R_REMOVE: [string, string] = ["r", "Remove"];
-export const HINT_I_INSTALL_ASSERTS: [string, string] = ["i", "Install asserts"];
+export const HINT_I_INSTALL_ASSERTS: [string, string] = ["i", "Install rules"];
 export const HINT_N_NEW_PRESET: [string, string] = ["n", "New preset"];
 export const HINT_E_EDIT_PRESET: [string, string] = ["e", "Edit preset"];
 export const HINT_SEARCH: [string, string] = ["/", "search"];
@@ -140,8 +158,21 @@ export const HINT_SEARCH: [string, string] = ["/", "search"];
 export type HintItem = [string, string] | [string, string, boolean];
 
 /** Format a single hint segment (no indent/separator). */
-function formatHintItem(theme: Theme, item: HintItem): string {
-  const [key, action, disabled] = item;
+function formatHintItem(
+  theme: Theme,
+  item: HintItem,
+  keybindings?: KeybindingsManager,
+): string {
+  const [rawKey, action, disabled] = item;
+  const binding = rawKey === "Enter"
+    ? "tui.select.confirm"
+    : rawKey === "Esc"
+      ? "tui.select.cancel"
+      : null;
+  const configured = binding && typeof keybindings?.getKeys === "function"
+    ? keybindings.getKeys(binding).map(String).join("/")
+    : "";
+  const key = configured || rawKey;
   if (disabled) {
     return theme.strikethrough(theme.fg("dim", `${key} ${action}`));
   }
@@ -149,11 +180,23 @@ function formatHintItem(theme: Theme, item: HintItem): string {
 }
 
 /** Format the full hint line from hint segments. */
-function formatHint(theme: Theme, items: HintItem[]): string {
+function formatHint(
+  theme: Theme,
+  items: HintItem[],
+  keybindings?: KeybindingsManager,
+): string {
   const dim = (s: string) => theme.fg("dim", s);
   const indent = dim("  ");
   const separator = dim(" · ");
-  return indent + items.map((i) => formatHintItem(theme, i)).join(separator);
+  return indent + items
+    .map((i) => formatHintItem(theme, i, keybindings))
+    .join(separator);
+}
+
+/** ANSI-safe final width guard for custom component output. */
+export function fitLines(lines: string[], width: number): string[] {
+  const safeWidth = Math.max(0, width);
+  return lines.map((line) => truncateToWidth(line, safeWidth, ""));
 }
 
 /**
@@ -165,32 +208,27 @@ export function renderHintLine(
   theme: Theme,
   width: number | undefined,
   items: HintItem[],
+  keybindings?: KeybindingsManager,
 ): string[] {
-  const single = formatHint(theme, items);
-  if (width === undefined || visibleWidth(single) <= width) {
-    return [single];
+  const single = formatHint(theme, items, keybindings);
+  if (width === undefined) return [single];
+  if (visibleWidth(single) <= width) return fitLines([single], width);
+
+  // Greedy whole-item wrapping with no two-line assumption.
+  const lines: string[] = [];
+  let current: HintItem[] = [];
+  for (const item of items) {
+    const candidate = [...current, item];
+    if (current.length > 0 &&
+        visibleWidth(formatHint(theme, candidate, keybindings)) > width) {
+      lines.push(formatHint(theme, current, keybindings));
+      current = [item];
+    } else {
+      current = candidate;
+    }
   }
-
-  const dim = (s: string) => theme.fg("dim", s);
-  const indent = dim("  ");
-  const separator = dim(" · ");
-
-  let firstLength = visibleWidth(indent + formatHintItem(theme, items[0]!));
-  let breakIndex = 1;
-  while (breakIndex < items.length) {
-    const nextLength = visibleWidth(
-      separator + formatHintItem(theme, items[breakIndex]!),
-    );
-    if (firstLength + nextLength > width) break;
-    firstLength += nextLength;
-    breakIndex++;
-  }
-  if (breakIndex === 0) breakIndex = 1;
-
-  return [
-    formatHint(theme, items.slice(0, breakIndex)),
-    formatHint(theme, items.slice(breakIndex)),
-  ];
+  if (current.length > 0) lines.push(formatHint(theme, current, keybindings));
+  return fitLines(lines, width);
 }
 
 /** Component wrapper around `renderHintLine` that receives the dialog width. */
@@ -198,10 +236,11 @@ class HintLine implements Component {
   constructor(
     private theme: Theme,
     private items: HintItem[],
+    private keybindings?: KeybindingsManager,
   ) {}
 
   render(width: number): string[] {
-    return renderHintLine(this.theme, width, this.items);
+    return renderHintLine(this.theme, width, this.items, this.keybindings);
   }
 
   invalidate() {}
@@ -213,7 +252,7 @@ class HintLine implements Component {
 // terminals still get a usable minimum.
 // ---------------------------------------------------------------------------
 const DIALOG_WIDTH = 80;
-const DIALOG_MIN_WIDTH = 80;
+const DIALOG_MIN_WIDTH = 24;
 
 // ---------------------------------------------------------------------------
 // OverlayBox — the single owner of the pi-assert overlay background.
@@ -275,7 +314,7 @@ interface DialogShellOptions {
    * `defaultHint` are ignored.
    */
   hintComponent?: Component;
-  maxHeight: number;
+  keybindings?: KeybindingsManager;
 }
 
 function dialogShell(
@@ -290,12 +329,13 @@ function dialogShell(
     new HintLine(
       theme,
       opts.hint ?? opts.defaultHint ?? [HINT_ENTER_SELECT, HINT_ESC_CANCEL],
+      opts.keybindings,
     );
 
   const container = titledBox(theme, opts.title, [opts.body, hintComp]);
 
   return {
-    render: (w: number) => container.render(w),
+    render: (w: number) => fitLines(container.render(w), w),
     invalidate: () => container.invalidate(),
   };
 }
@@ -384,7 +424,7 @@ export async function selectDialog<T>(
     hasDetail ? 24 : 16,
   );
 
-  return ctx.ui.custom<SelectDialogResult<T>>((tui, theme, _kb, done) => {
+  return ctx.ui.custom<SelectDialogResult<T>>((tui, theme, kb, done) => {
     const max = opts.maxVisible ?? Math.min(opts.items.length, hasDetail ? 10 : 12);
 
     // Widest mark reserves a badge column; marks render outside the accent
@@ -432,6 +472,7 @@ export async function selectDialog<T>(
       theme,
       renderRow,
       (item) => opts.detailFor?.(item.value),
+      kb,
     );
     if (opts.initialIndex !== undefined && opts.items.length > 0) {
       list.selectedIndex = Math.max(
@@ -464,7 +505,7 @@ export async function selectDialog<T>(
             const items = item
               ? opts.hintFor!(item)
               : (opts.hint ?? [HINT_ENTER_SELECT, HINT_ESC_CANCEL]);
-            return renderHintLine(theme, w, items);
+            return renderHintLine(theme, w, items, kb);
           },
           invalidate() {},
         } as Component)
@@ -475,7 +516,7 @@ export async function selectDialog<T>(
       body: list,
       hint: opts.hint,
       hintComponent,
-      maxHeight,
+      keybindings: kb,
     });
 
     // A confirm shell is needed when either the `r` Remove flow or the
@@ -503,7 +544,7 @@ export async function selectDialog<T>(
             ["y", "confirm"],
             ["n", "cancel"],
           ],
-          maxHeight,
+          keybindings: kb,
         })
       : null;
 
@@ -524,7 +565,7 @@ export async function selectDialog<T>(
             });
             return;
           }
-          if (matchesKey(data, "n") || matchesKey(data, Key.escape)) {
+          if (matchesKey(data, "n") || bindingMatches(kb, data, "tui.select.cancel", Key.escape)) {
             confirmItem = null;
             tui.requestRender();
             return;
@@ -634,7 +675,7 @@ export function renderDetailList<T>(
     lines.push(theme.fg("dim", `  (${selectedIndex + 1}/${len})`));
   }
 
-  return lines;
+  return fitLines(lines, width);
 }
 
 // ---------------------------------------------------------------------------
@@ -655,6 +696,7 @@ export class DetailList<T = SelectItem> implements Component {
     private theme: Theme,
     private renderRow: (item: T, selected: boolean, width: number) => string,
     private detailFor: (item: T) => AssertDetailEntry | undefined,
+    private keybindings?: KeybindingsManager,
   ) {}
 
   invalidate() {}
@@ -675,22 +717,25 @@ export class DetailList<T = SelectItem> implements Component {
 
   handleInput(data: string): void {
     if (this.items.length === 0) return;
-    if (matchesKey(data, "up")) {
+    const matches = (id: "tui.select.up" | "tui.select.down" |
+      "tui.select.confirm" | "tui.select.cancel", fallback: KeyId): boolean =>
+      bindingMatches(this.keybindings, data, id, fallback);
+    if (matches("tui.select.up", "up")) {
       this.selectedIndex =
         this.selectedIndex === 0 ? this.items.length - 1 : this.selectedIndex - 1;
       return;
     }
-    if (matchesKey(data, "down")) {
+    if (matches("tui.select.down", "down")) {
       this.selectedIndex =
         this.selectedIndex === this.items.length - 1 ? 0 : this.selectedIndex + 1;
       return;
     }
-    if (matchesKey(data, "enter")) {
+    if (matches("tui.select.confirm", "enter")) {
       const item = this.items[this.selectedIndex];
       if (item && this.onSelect) this.onSelect(item);
       return;
     }
-    if (matchesKey(data, Key.escape)) {
+    if (matches("tui.select.cancel", Key.escape)) {
       if (this.onCancel) this.onCancel();
       return;
     }
@@ -719,62 +764,53 @@ export async function textInputDialog(
     /** Hint segments as `[key, action]` pairs, rendered via `formatHint`. */
     hint?: [string, string][];
     initial?: string;
+    /** Permit a trimmed empty value (descriptions are schema-valid when empty). */
+    allowEmpty?: boolean;
+    /** Return an error message to keep the dialog open. */
+    validate?: (value: string) => string | null;
   },
 ): Promise<string | null> {
   const maxHeight = 8;
 
-  return ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
-    let buffer = opts.initial ?? "";
+  return ctx.ui.custom<string | null>((tui, theme, kb, done) => {
+    const input = new Input();
+    input.setValue(opts.initial ?? "");
 
-    const inputDisplay = new (class {
-      render() {
-        return [`  ${theme.fg("accent", buffer || " ")}`];
-      }
-      invalidate() {}
-    })();
-
-    // Body = label + input field, wrapped so dialogShell can place it
-    // between the title border and the hint (which it appends itself).
     const body = new Container();
     body.addChild(new Text(theme.fg("muted", opts.label), 1, 0));
-    body.addChild(inputDisplay);
+    body.addChild(input);
 
     const shell = dialogShell(theme, {
       title: opts.title,
       body,
       hint: opts.hint,
-      defaultHint: [
-        ["enter", "confirm"],
-        ["esc", "cancel"],
-      ],
-      maxHeight,
+      defaultHint: [HINT_ENTER_CONFIRM, HINT_ESC_CANCEL],
+      keybindings: kb,
     });
 
     return {
+      get focused() { return input.focused; },
+      set focused(value: boolean) { input.focused = value; },
       render: shell.render,
       invalidate: shell.invalidate,
       handleInput: (data: string) => {
-        if (matchesKey(data, Key.escape)) {
+        if (bindingMatches(kb, data, "tui.select.cancel", Key.escape)) {
           done(null);
           return;
         }
-        if (matchesKey(data, "enter")) {
-          const trimmed = buffer.trim();
-          if (!trimmed) return;
-          done(trimmed);
+        if (bindingMatches(kb, data, "tui.select.confirm", "enter")) {
+          const value = input.getValue().trim();
+          if (!opts.allowEmpty && !value) return;
+          const error = opts.validate?.(value);
+          if (error) {
+            ctx.ui.notify(error, "warning");
+            return;
+          }
+          done(value);
           return;
         }
-        if (matchesKey(data, "backspace")) {
-          buffer = buffer.slice(0, -1);
-          tui.requestRender();
-          return;
-        }
-        // Append printable characters (supports paste)
-        const filtered = filterPrintable(data);
-        if (filtered.length > 0) {
-          buffer += filtered;
-          tui.requestRender();
-        }
+        input.handleInput(data);
+        tui.requestRender();
       },
     };
   }, dialogOverlay(maxHeight));

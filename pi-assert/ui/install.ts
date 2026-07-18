@@ -18,6 +18,7 @@ import {
   type RuleFile,
 } from "../installer.js";
 import { type ShellAssert, type PresetAssert } from "../engine.js";
+import { entryKey, parseEntryRef } from "../domain/entry.js";
 import {
   HINT_ENTER_CONFIRM,
   HINT_ENTER_INSTALL,
@@ -187,7 +188,7 @@ async function promptAssertEntry(
           : st === "outdated"
             ? HINT_ENTER_UPDATE
             : HINT_ENTER_UNINSTALL;
-      return [enterHint, HINT_ESC_CANCEL];
+      return [enterHint, HINT_ESC_BACK];
     },
     // `Enter` on an `"installed"` entry swaps to a y/n uninstall confirm
     // before the dialog resolves.  This `shouldConfirm` predicate MUST stay
@@ -198,11 +199,11 @@ async function promptAssertEntry(
     // "installed"` test.
     confirmOnSelect: {
       shouldConfirm: (item) => stateFor(item.value) === "installed",
-      title: "Uninstall",
+      title: "Remove rule",
       message: (item) => {
         const e = entries[item.value];
         const kind = e && "preset" in e ? "preset" : "assert";
-        return `  Uninstall "${item.value}" ${kind}?`;
+        return `  Remove "${item.value}" ${kind}?`;
       },
     },
     detailFor: (value) => {
@@ -234,7 +235,7 @@ async function fetchEntries(
   }
 
   if (Object.keys(entries).length === 0) {
-    ctx.ui.notify("No valid asserts in this file.", "info");
+    ctx.ui.notify("No valid rules in this file.", "info");
     return null;
   }
 
@@ -268,28 +269,30 @@ async function installPresetMembers(
   // promise per repo, so duplicate refs and same-repo members are one round.
   const members = new Map<string, { source: string; name: string }>();
   for (const ref of refs) {
-    const idx = ref.lastIndexOf("/");
-    if (idx < 0) continue;
-    const source = ref.slice(0, idx);
-    const name = ref.slice(idx + 1);
-    if (source !== "local") members.set(`${source}\x00${name}`, { source, name });
+    const parsed = parseEntryRef(ref);
+    if (parsed && parsed.source !== "local") {
+      members.set(entryKey(parsed.source, parsed.name), parsed);
+    }
   }
-  const installed = new Set(state.asserts.map((a) => `${a.source}\x00${a.name}`));
-  await Promise.all([...members.values()].map(async ({ source, name }) => {
-    if (installed.has(`${source}\x00${name}`)) return;
+  const installed = new Set(state.asserts.map((a) => entryKey(a.source, a.name)));
+  // Writes are sequential because every install is a read-modify-write of the
+  // same project file. Repo fetches remain session-cached by fetchRepoEntries.
+  for (const { source, name } of members.values()) {
+    if (installed.has(entryKey(source, name))) continue;
     try {
       const entries = await fetchRepoEntries(source);
       const entry = entries.get(name);
       if (!entry) {
         ctx.ui.notify(`pi-assert: member "${name}" not found in ${source}.`, "warning");
-        return;
+        continue;
       }
       installRule(ctx.cwd, source, name, entry);
+      installed.add(entryKey(source, name));
       ctx.ui.notify(`pi-assert: installed member "${name}" (via preset).`, "info");
     } catch (err) {
       ctx.ui.notify(`pi-assert: failed to fetch member "${name}" — ${String(err)}`, "error");
     }
-  }));
+  }
 }
 
 async function installAndReload(
@@ -357,13 +360,13 @@ function removeAndReload(
   );
 }
 
-function updateAndReload(
+async function updateAndReload(
   ctx: ExtensionContext,
   state: AssertsState,
   name: string,
   entry: RuleEntry,
   installed: ShellAssert | PresetAssert,
-): void {
+): Promise<void> {
   // `installed.path` is set for repo-sourced entries (the only kind the
   // wizard reaches this branch for).  Guard explicitly instead of asserting
   // via `!` so a future caller with a local entry degrades gracefully.
@@ -384,13 +387,21 @@ function updateAndReload(
     );
     return;
   }
+  if (!updated) {
+    ctx.ui.notify(
+      `pi-assert: "${name}" was not found on disk; install instead.`,
+      "info",
+    );
+    return;
+  }
+
+  // Installation and update share the same preset-member synchronization:
+  // newly added refs must not leave an updated preset immediately dangling.
+  if ("preset" in entry) {
+    await installPresetMembers(ctx, state, entry.preset);
+  }
   reload(ctx, state);
-  ctx.ui.notify(
-    updated
-      ? `pi-assert: updated "${name}".`
-      : `pi-assert: "${name}" was not found on disk; install instead.`,
-    "info",
-  );
+  ctx.ui.notify(`pi-assert: updated "${name}".`, "info");
 }
 
 // ---------------------------------------------------------------------------
@@ -403,6 +414,14 @@ export async function runInstallWizard(
   ctx: ExtensionContext,
   state: AssertsState,
 ): Promise<void> {
+  const trustAware = ctx as ExtensionContext & {
+    isProjectTrusted?: () => boolean;
+  };
+  if (trustAware.isProjectTrusted?.() === false) {
+    ctx.ui.notify("pi-assert: trust this project before installing rules.", "error");
+    return;
+  }
+
   // Step 1: pick (or add) a repo
   const repos = getInstalledRepos(ctx.cwd);
   const choice = await promptRepoChoice(ctx, repos);
@@ -456,7 +475,7 @@ export async function runInstallWizard(
       if (entryState === "not-installed") {
         await installAndReload(ctx, state, repo, name, repoEntry);
       } else if (entryState === "outdated") {
-        updateAndReload(ctx, state, name, repoEntry, installed!);
+        await updateAndReload(ctx, state, name, repoEntry, installed!);
       } else {
         // "installed" → uninstall
         removeAndReload(ctx, state, repo, name, installed!);
