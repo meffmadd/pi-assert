@@ -93,7 +93,10 @@
             "preset": {
               "type": "array",
               "description": "Qualified \"source/name\" refs (local/name or owner/repo/name) expanded to their shell asserts when the preset is active. Empty array is valid. Ref shape is enforced at write time by validatePresetShape (REF_RE).",
-              "items": { "type": "string" }
+              "items": {
+                "type": "string",
+                "pattern": "^(local/[A-Za-z0-9._-]+|(?!local/)[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)$"
+              }
             },
             "default": {
               "type": "boolean",

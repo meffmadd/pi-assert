@@ -9,7 +9,7 @@ import { isPreset, type Assert, type PresetAssert } from "../engine.js";
 import {
   fetchRepoEntries,
   installRule,
-  removeRule,
+  removeRuleAt,
   setAssertDefault,
   editPresetRule,
 } from "../installer.js";
@@ -36,7 +36,7 @@ import {
 } from "./components.js";
 import { highlightSegments } from "./fuzzy.js";
 import { SectionedPanel, type Group, groupShellBySource } from "./sectioned-panel.js";
-import type { AssertsState } from "./state.js";
+import { resolvePresetMembers, type AssertsState } from "./state.js";
 import { runInstallWizard } from "./install.js";
 import { runPresetEditor } from "./preset-editor.js";
 
@@ -64,20 +64,12 @@ function groupBySource(asserts: Assert[]): Group[] {
 // ---------------------------------------------------------------------------
 function buildPresetCoverage(
   asserts: Assert[],
-  active: Set<string>,
+  isActive: (assert: Assert) => boolean,
 ): Map<string, string[]> {
-  const byKey = new Map(
-    asserts.map((a) => [`${a.source}\x00${a.name}`, a]),
-  );
   const coverage = new Map<string, string[]>();
   for (const a of asserts) {
-    if (!active.has(a.name) || !isPreset(a)) continue;
-    for (const ref of a.preset) {
-      const idx = ref.lastIndexOf("/");
-      const member = idx >= 0
-        ? byKey.get(ref.slice(0, idx) + "\x00" + ref.slice(idx + 1))
-        : undefined;
-      if (!member || isPreset(member)) continue; // dangling or nested → skip
+    if (!isActive(a) || !isPreset(a)) continue;
+    for (const member of resolvePresetMembers(asserts, a)) {
       const key = `${member.source}\x00${member.name}`;
       const list = coverage.get(key) ?? [];
       list.push(a.name);
@@ -98,7 +90,7 @@ type PanelAction =
   | { type: "edit-preset"; preset: PresetAssert };
 
 export class AssertsPanel extends SectionedPanel {
-  private confirm: { name: string; source: string } | null = null;
+  private confirm: { name: string; source: string; path?: string } | null = null;
 
   /**
    * Composite keys (`${source}\0${name}`) of installed asserts that no longer
@@ -118,7 +110,7 @@ export class AssertsPanel extends SectionedPanel {
   private _coverage: Map<string, string[]> | null = null;
   private get coverage(): Map<string, string[]> {
     if (this._coverage === null) {
-      this._coverage = buildPresetCoverage(this.state.asserts, this.state.active);
+      this._coverage = buildPresetCoverage(this.state.asserts, (a) => this.activeFor(a));
     }
     return this._coverage;
   }
@@ -288,6 +280,12 @@ export class AssertsPanel extends SectionedPanel {
   }
 
   // ── Render helpers ─────────────────────────────────────────────────
+  /** Compatibility fallback keeps lightweight panel consumers working. */
+  private activeFor(a: Assert): boolean {
+    const modern = this.state as AssertsState & { isActive?: (entry: Assert) => boolean };
+    return modern.isActive ? modern.isActive(a) : this.state.active.has(a.name);
+  }
+
   /** The plain row label: `name` plus the optional ` (default)` tag. */
   private plainLabel(a: Assert): string {
     return a.default ? `${a.name} (default)` : a.name;
@@ -307,7 +305,7 @@ export class AssertsPanel extends SectionedPanel {
    * collapse to `via {n} presets`.
    */
   private renderStatus(a: Assert): string {
-    if (this.state.active.has(a.name)) {
+    if (this.activeFor(a)) {
       return this.theme.fg("accent", "enabled");
     }
     const via = this.coverage.get(`${a.source}\x00${a.name}`);
@@ -605,9 +603,17 @@ export class AssertsPanel extends SectionedPanel {
     // ── Confirmation mode ──
     if (this.confirm) {
       if (matchesKey(data, "y")) {
-        const { name, source } = this.confirm;
-        removeRule(ctx.cwd, source, name);
-        this.state.disable(name);
+        const { name, source, path } = this.confirm;
+        if (!path) {
+          ctx.ui.notify(`pi-assert: cannot locate "${name}" on disk`, "error");
+          this.confirm = null;
+          return undefined;
+        }
+        removeRuleAt(path, source, name);
+        const selected = this.state.asserts.find((a) =>
+          a.source === source && a.name === name && a.path === path,
+        );
+        if (selected) this.state.disable(selected);
         this._coverage = null;
         this.state.persist();
         this.confirm = null;
@@ -629,12 +635,24 @@ export class AssertsPanel extends SectionedPanel {
     // ── Panel-specific hotkeys (asserts-panel-only) ──
     // `/` (search), Enter (toggle), Tab/Shift+Tab, arrows are shared and live
     // in `handleNavInput` at the bottom; `i`/`n`/`p`/Esc are asserts-only.
-    if (matchesKey(data, "i")) return "install";
+    if (matchesKey(data, "i")) {
+      if (this.state.broken) {
+        ctx.ui.notify("pi-assert: fix asserts.json before installing rules.", "error");
+        return undefined;
+      }
+      return "install";
+    }
     // `n` opens the new-preset dialog (handled by the command loop).  In
     // confirm mode `n` cancels (confirm is checked first); in search `n`
     // feeds the query (search is checked first) — so this branch is only
     // reached in normal mode.
-    if (matchesKey(data, "n")) return "create-preset";
+    if (matchesKey(data, "n")) {
+      if (this.state.broken) {
+        ctx.ui.notify("pi-assert: fix asserts.json before creating a preset.", "error");
+        return undefined;
+      }
+      return "create-preset";
+    }
     // `p` jumps to the always-first Presets section (row 0, or the header
     // when empty).  Presets is always index 0 (see `groupBySource`).
     if (matchesKey(data, "p")) {
@@ -666,7 +684,7 @@ export class AssertsPanel extends SectionedPanel {
     if (matchesKey(data, "r")) {
       const selected = focused.asserts[this.nav.focusedIndex];
       if (selected) {
-        this.confirm = { name: selected.name, source: selected.source };
+        this.confirm = { name: selected.name, source: selected.source, path: selected.path };
       }
       return undefined;
     }
@@ -751,8 +769,11 @@ export class AssertsPanel extends SectionedPanel {
     const focused = this.groups[this.nav.focusedSection];
     const selected = focused?.asserts[this.nav.focusedIndex];
     if (!selected) return;
-    if (this.state.active.has(selected.name)) this.state.disable(selected.name);
-    else this.state.enable(selected.name);
+    const isModern = typeof (this.state as { isActive?: unknown }).isActive === "function";
+    // Older lightweight consumers expose name-based mutators; production
+    // state exposes isActive and stores canonical source-qualified keys.
+    if (this.activeFor(selected)) this.state.disable(isModern ? selected : selected.name);
+    else this.state.enable(isModern ? selected : selected.name);
     this._coverage = null;
     this.state.persist();
     this.state.updateStatus(this._ctx);
@@ -877,9 +898,9 @@ export function registerAssertsCommand(
       while (true) {
         state.load(ctx.cwd);
         // Prune stale active entries that no longer exist
-        const validNames = new Set(state.asserts.map((a) => a.name));
-        for (const name of Array.from(state.active)) {
-          if (!validNames.has(name)) state.disable(name);
+        const validKeys = new Set(state.asserts.map((a) => state.keyOf(a)));
+        for (const key of Array.from(state.active)) {
+          if (!validKeys.has(key)) state.disable(key);
         }
         state.updateStatus(ctx);
 

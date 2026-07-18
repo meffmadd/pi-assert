@@ -184,7 +184,8 @@ describe("loadAsserts", () => {
 
     // 1.5 ── Invalid entries silently skipped
     {
-      label: "invalid entries = silently skipped",
+      label: "invalid entries fail closed",
+      invalid: true,
       projectJson: {
         local: {
           "valid-one": { description: "d", hook: "tool_call", shell: "true" },
@@ -208,7 +209,8 @@ describe("loadAsserts", () => {
     },
 
     {
-      label: "all entries invalid → []",
+      label: "all invalid entries fail closed",
+      invalid: true,
       projectJson: {
         local: {
           x: { shell: "true" },
@@ -752,7 +754,8 @@ describe("loadAsserts", () => {
 
     // 1.20 ── Non-object top-level values → skipped
     {
-      label: "non-object top-level values → skipped",
+      label: "non-object top-level values fail closed",
+      invalid: true,
       projectJson: {
         local: {
           guard: { description: "d", hook: "tool_call", shell: "true" },
@@ -930,6 +933,10 @@ describe("loadAsserts", () => {
       clearGlobal();
       if (globalJson !== undefined) makeGlobal(globalJson);
       const cwd = setupCwd(i, projectJson);
+      if ("invalid" in cases[i] && cases[i].invalid) {
+        assert.throws(() => loadAsserts(cwd), AssertsParseError);
+        return;
+      }
       // Strip the engine-internal `path` field so the table stays focused
       // on the user-visible assertion shape.  Provenance is covered by
       // the dedicated `loadAsserts — Assert.path provenance` suite below.

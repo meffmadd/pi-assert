@@ -65,6 +65,8 @@ export class PresetEditorPanel extends SectionedPanel {
   private _theme!: Theme;
 
   private shellAsserts: Assert[];
+  /** Original order preserves dangling/nested refs on an otherwise no-op edit. */
+  private initialOrder: string[];
 
   constructor(
     shellAsserts: Assert[],
@@ -80,7 +82,8 @@ export class PresetEditorPanel extends SectionedPanel {
     this.nav = new SectionNavigator(
       this.groups.map((g) => ({ items: g.asserts })),
     );
-    this.selected = new Set(selected);
+    this.initialOrder = Array.from(selected);
+    this.selected = new Set(this.initialOrder);
     // Open on the first non-empty section so the user lands on a real row.
     const firstNonEmpty = this.groups.findIndex((g) => g.asserts.length > 0);
     if (firstNonEmpty >= 0) this.nav.focus = firstNonEmpty;
@@ -103,11 +106,16 @@ export class PresetEditorPanel extends SectionedPanel {
     return `${a.source}/${a.name}`;
   }
 
-  /** The committed selection: selected refs in original item order. */
+  /** The committed selection, retaining refs that have no selectable row. */
   get value(): string[] {
-    return this.shellAsserts
-      .filter((a) => this.selected.has(this.refOf(a)))
-      .map((a) => this.refOf(a));
+    const original = this.initialOrder.filter((ref) => this.selected.has(ref));
+    const originalSet = new Set(this.initialOrder);
+    // Newly selected visible asserts append in picker order. Existing refs
+    // retain their exact order, including dangling and nested-preset refs.
+    const added = this.shellAsserts
+      .map((a) => this.refOf(a))
+      .filter((ref) => this.selected.has(ref) && !originalSet.has(ref));
+    return [...original, ...added];
   }
 
   // ── Hooks (implement SectionedPanel abstracts / overrides) ────────

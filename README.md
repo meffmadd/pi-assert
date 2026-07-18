@@ -1,8 +1,10 @@
 # pi-assert
 
-Define asserts for Pi hooks as shell one-liners in `asserts.json`. Any tool call that violates these invariants gets blocked.
+Shell guards for Pi tool calls. Assertions are loaded from project
+`.pi/asserts.json` and global `~/.pi/asserts.json`; a project entry overrides a
+global entry only when both its **source section and name** match.
 
-## Quick Start
+## Quick start
 
 ```bash
 pi install ./path/to/pi-assert
@@ -12,47 +14,80 @@ Create `.pi/asserts.json`:
 
 ```json
 {
-  "unmodified": {
-    "hook": "tool_call",
-    "filter": { "toolName": "write" },
-    "shell": "false"
-  },
-  "no-rm-rf": {
-    "hook": "tool_call",
-    "filter": { "toolName": "bash" },
-    "shell": "grep -qE 'rm[[:space:]]+-rf' <<< \"$PI_TOOL_INPUT\" && exit 1 || exit 0"
+  "$schema": "https://raw.githubusercontent.com/meffmadd/pi-assert/main/schema.json",
+  "local": {
+    "unmodified": {
+      "description": "Block direct writes",
+      "hook": "tool_call",
+      "filter": { "toolName": "write" },
+      "shell": "false"
+    },
+    "no-rm-rf": {
+      "description": "Block dangerous shell removal",
+      "hook": "tool_call",
+      "filter": { "toolName": "bash" },
+      "shell": "echo \"$PI_TOOL_INPUT\" | grep -qE 'rm[[:space:]]+-rf' && exit 1 || exit 0"
+    }
   }
 }
 ```
 
-Start pi — all `write` calls and dangerous `rm -rf` commands are now blocked.
+## Format
 
-## How It Works
+The top-level object is sectioned by source. `local` contains hand-written
+rules; an `owner/repo` section contains installed rules. `repos` declares repo
+sources available to the installer.
 
-1. On session start, pi-assert loads asserts from `.pi/asserts.json` (project)
-   and `~/.pi/asserts.json` (global). Project keys override global.
-2. On every `tool_call`, matching asserts run in order. A filter (if provided)
-   is matched against `{ toolName, ...event.input }`.
-3. The shell command runs with environment variables (`PI_TOOL_NAME`,
-   `PI_TOOL_INPUT`, `PI_CWD`, etc.).
-4. Exit 0 → allow. Non-zero → block with a TUI notification.
+```json
+{
+  "repos": ["owner/rules"],
+  "local": {
+    "check-tree": {
+      "description": "Require a clean tree at turn end",
+      "hook": "agent_end",
+      "shell": "git diff --quiet",
+      "default": true
+    }
+  },
+  "owner/rules": {
+    "hide-secrets": {
+      "description": "Redact secret-looking read results",
+      "hook": "tool_result",
+      "filter": { "toolName": "read" },
+      "shell": "grep -q SECRET \"$PI_TOOL_RESULT\" && exit 1 || exit 0"
+    }
+  }
+}
+```
 
-## Asserts Format
+Shell assertions require `description`, `hook` (`tool_call`, `tool_result`, or
+`agent_end`), and `shell`. Optional `filter`, `when`, and boolean `default`
+are supported. Filters match tool input plus a trusted `toolName`; `when`
+only skips on an ordinary non-zero exit—timeouts and execution failures block.
+Shells run with `PWD` and `PI_CWD` set to the Pi project directory.
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `hook` | yes | Pi event. Currently `"tool_call"`. |
-| `filter` | no | Key-value match against tool call input. Each value may be a scalar or an array (array = "any of", e.g. `{ "toolName": ["write", "edit"] }`). |
-| `shell` | yes | Shell command. Exit 0 = pass, non-zero = block. |
+A preset replaces shell fields with a `preset` array of qualified refs:
 
-## Environment Variables
+```json
+{
+  "local": {
+    "safe-writes": {
+      "description": "My write safeguards",
+      "preset": ["local/unmodified", "owner/rules/protect-env"]
+    }
+  }
+}
+```
 
-| Variable | Value |
-|----------|-------|
-| `PI_TOOL_NAME` | Tool name (e.g. `"bash"`, `"write"`) |
-| `PI_TOOL_CALL_ID` | Unique call ID |
-| `PI_TOOL_INPUT` | Full input as JSON string |
-| `PI_CWD` | Current working directory |
+`tool_call` blocks a call, `tool_result` replaces a failed result with a
+redacted error, and `agent_end` starts a corrective turn for failures. Use
+`/asserts` to install, enable, disable, and manage rules and presets.
+
+## Environment
+
+Tool hooks receive `PI_TOOL_NAME`, `PI_TOOL_CALL_ID`, `PI_TOOL_INPUT`, and
+`PI_CWD`; result hooks additionally receive `PI_TOOL_RESULT` and
+`PI_TOOL_IS_ERROR`. Agent-end hooks receive `PI_EVENT=agent_end` and `PI_CWD`.
 
 ## License
 

@@ -6,6 +6,25 @@ import {
   type Assert,
   type LoadError,
 } from "../engine.js";
+import { entryKey } from "../config.js";
+
+// ---------------------------------------------------------------------------
+// Preset resolution — shared by active execution and panel coverage.
+// ---------------------------------------------------------------------------
+/** Resolve one level of a preset to installed shell asserts, in ref order. */
+export function resolvePresetMembers(asserts: Assert[], preset: Assert): Assert[] {
+  if (!isPreset(preset)) return [];
+  const byKey = new Map(asserts.map((a) => [entryKey(a.source, a.name), a]));
+  const members: Assert[] = [];
+  for (const ref of preset.preset) {
+    const idx = ref.lastIndexOf("/");
+    const member = idx >= 0
+      ? byKey.get(entryKey(ref.slice(0, idx), ref.slice(idx + 1)))
+      : undefined;
+    if (member && !isPreset(member)) members.push(member);
+  }
+  return members;
+}
 
 // ---------------------------------------------------------------------------
 // AssertsState — owns the model: loaded asserts, active set, persistence,
@@ -79,6 +98,28 @@ export class AssertsState {
   }
 
   // ── Persistence ────────────────────────────────────────────────────
+  /** Canonical, source-qualified key for an entry. */
+  keyOf(a: Assert): string {
+    return entryKey(a.source, a.name);
+  }
+
+  /** Whether this entry is enabled. Legacy bare names only match uniquely. */
+  isActive(a: Assert): boolean {
+    const key = this.keyOf(a);
+    if (this.active.has(key)) return true;
+    // Backward compatibility for old session entries and hand-built state in
+    // extensions/tests. Never let a bare name enable colliding entries.
+    return this.active.has(a.name) &&
+      this.asserts.filter((other) => other.name === a.name).length === 1;
+  }
+
+  private resolveKey(value: Assert | string): string {
+    if (typeof value !== "string") return this.keyOf(value);
+    if (value.includes("\x00")) return value;
+    const matches = this.asserts.filter((a) => a.name === value);
+    return matches.length === 1 ? this.keyOf(matches[0]!) : value;
+  }
+
   /** Persist the current active set to the session branch. */
   persist(): void {
     this.pi.appendEntry("pi-assert-config", {
@@ -107,26 +148,33 @@ export class AssertsState {
     }
 
     if (saved) {
-      // Restore saved selection (filter to asserts that still exist)
-      const allNames = new Set(this.asserts.map((a) => a.name));
-      this.active = new Set(saved.filter((n) => allNames.has(n)));
+      // Saved v2 entries are source-qualified. Explicitly migrate old bare
+      // names only when they identify exactly one loaded entry; ambiguous old
+      // entries are dropped rather than enabling every collision.
+      const valid = new Set(this.asserts.map((a) => this.keyOf(a)));
+      const migrated = saved.flatMap((value) => {
+        if (value.includes("\x00")) return valid.has(value) ? [value] : [];
+        const matches = this.asserts.filter((a) => a.name === value);
+        return matches.length === 1 ? [this.keyOf(matches[0]!)] : [];
+      });
+      this.active = new Set(migrated);
     } else {
       // No saved state — enable only asserts with default: true
       this.active = new Set(
-        this.asserts.filter((a) => a.default).map((a) => a.name),
+        this.asserts.filter((a) => a.default).map((a) => this.keyOf(a)),
       );
     }
   }
 
   // ── Mutators ───────────────────────────────────────────────────────
   /** Add a named assert to the active set. */
-  enable(name: string): void {
-    this.active.add(name);
+  enable(assert: Assert | string): void {
+    this.active.add(this.resolveKey(assert));
   }
 
-  /** Remove a named assert from the active set. */
-  disable(name: string): void {
-    this.active.delete(name);
+  /** Remove an assert from the active set. */
+  disable(assert: Assert | string): void {
+    this.active.delete(this.resolveKey(assert));
   }
 
   /** Remove every assert from the active set. */
@@ -135,9 +183,10 @@ export class AssertsState {
   }
 
   /** Toggle a named assert's active state. */
-  toggle(name: string): void {
-    if (this.active.has(name)) this.active.delete(name);
-    else this.active.add(name);
+  toggle(assert: Assert | string): void {
+    const key = this.resolveKey(assert);
+    if (this.active.has(key)) this.active.delete(key);
+    else this.active.add(key);
   }
 
   /**
@@ -159,28 +208,19 @@ export class AssertsState {
    * `isPreset` guard for narrowing — see {@link runAsserts}).
    */
   activeList(): Assert[] {
-    const byKey = new Map(
-      this.asserts.map((a) => [`${a.source}\x00${a.name}`, a]),
-    );
     const out: Assert[] = [];
     const seen = new Set<string>();
     for (const a of this.asserts) {
-      if (!this.active.has(a.name)) continue;
+      if (!this.isActive(a)) continue;
       if (isPreset(a)) {
-        for (const ref of a.preset) {
-          const idx = ref.lastIndexOf("/"); // last "/", not first
-          const member =
-            idx >= 0
-              ? byKey.get(ref.slice(0, idx) + "\x00" + ref.slice(idx + 1))
-              : undefined;
-          if (!member || isPreset(member)) continue; // dangling or nested → skip
-          const key = `${member.source}\x00${member.name}`;
+        for (const member of resolvePresetMembers(this.asserts, a)) {
+          const key = this.keyOf(member);
           if (seen.has(key)) continue;
           seen.add(key);
           out.push(member);
         }
       } else {
-        const key = `${a.source}\x00${a.name}`;
+        const key = this.keyOf(a);
         if (!seen.has(key)) {
           seen.add(key);
           out.push(a);

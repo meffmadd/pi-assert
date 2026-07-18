@@ -6,9 +6,10 @@ import {
   classifyEntry,
   fetchRuleFile,
   fetchRuleFiles,
+  fetchRepoEntries,
   getInstalledRepos,
   installRule,
-  removeRule,
+  removeRuleAt,
   updateRule,
   REPO_ADD_ACTION,
   type EntryState,
@@ -258,64 +259,46 @@ function reload(ctx: ExtensionContext, state: AssertsState): void {
  *
  * Dedup by `source\x00name`; a missing member is skipped (preset installs anyway, shows §).
  */
-function installPresetMembers(
+async function installPresetMembers(
   ctx: ExtensionContext,
   state: AssertsState,
-  ref: string,
-): void {
-  const idx = ref.lastIndexOf("/");
-  if (idx < 0) return; // invalid ref, skip
-  const source = ref.slice(0, idx);
-  const memberName = ref.slice(idx + 1);
-
-  if (source === "local") {
-    // Local asserts aren't in a repo; skip (will show § if missing)
-    return;
+  refs: string[],
+): Promise<void> {
+  // Deduplicate before starting requests. fetchRepoEntries also shares a
+  // promise per repo, so duplicate refs and same-repo members are one round.
+  const members = new Map<string, { source: string; name: string }>();
+  for (const ref of refs) {
+    const idx = ref.lastIndexOf("/");
+    if (idx < 0) continue;
+    const source = ref.slice(0, idx);
+    const name = ref.slice(idx + 1);
+    if (source !== "local") members.set(`${source}\x00${name}`, { source, name });
   }
-
-  // Check if already installed
-  const alreadyInstalled = state.asserts.some(
-    (a) => a.source === source && a.name === memberName,
-  );
-  if (alreadyInstalled) return;
-
-  // Fetch the repo's entries and install the member if found
-  (async () => {
+  const installed = new Set(state.asserts.map((a) => `${a.source}\x00${a.name}`));
+  await Promise.all([...members.values()].map(async ({ source, name }) => {
+    if (installed.has(`${source}\x00${name}`)) return;
     try {
-      const repoEntries = await fetchRuleFiles(source);
-      // Find which file contains the member
-      for (const file of repoEntries) {
-        const entries = await fetchRuleFile(source, file.path);
-        if (memberName in entries) {
-          const memberEntry = entries[memberName]!;
-          installRule(ctx.cwd, source, memberName, memberEntry);
-          ctx.ui.notify(
-            `pi-assert: installed member "${memberName}" (via preset).`,
-            "info",
-          );
-          return;
-        }
+      const entries = await fetchRepoEntries(source);
+      const entry = entries.get(name);
+      if (!entry) {
+        ctx.ui.notify(`pi-assert: member "${name}" not found in ${source}.`, "warning");
+        return;
       }
-      ctx.ui.notify(
-        `pi-assert: member "${memberName}" not found in ${source}.`,
-        "warning",
-      );
+      installRule(ctx.cwd, source, name, entry);
+      ctx.ui.notify(`pi-assert: installed member "${name}" (via preset).`, "info");
     } catch (err) {
-      ctx.ui.notify(
-        `pi-assert: failed to fetch member "${memberName}" — ${String(err)}`,
-        "error",
-      );
+      ctx.ui.notify(`pi-assert: failed to fetch member "${name}" — ${String(err)}`, "error");
     }
-  })();
+  }));
 }
 
-function installAndReload(
+async function installAndReload(
   ctx: ExtensionContext,
   state: AssertsState,
   repo: string,
   name: string,
   entry: RuleEntry,
-): void {
+): Promise<void> {
   let overwritten: boolean;
   try {
     overwritten = installRule(ctx.cwd, repo, name, entry);
@@ -329,11 +312,11 @@ function installAndReload(
 
   // Cascade: if installing a preset, install its members
   if ("preset" in entry) {
-    for (const ref of entry.preset) {
-      installPresetMembers(ctx, state, ref);
-    }
+    await installPresetMembers(ctx, state, entry.preset);
   }
 
+  // Reload only after the complete cascade settles so newly enabled presets
+  // immediately resolve their installed members.
   reload(ctx, state);
   ctx.ui.notify(
     `pi-assert: installed "${name}". Use /asserts to enable it.`,
@@ -352,10 +335,12 @@ function removeAndReload(
   state: AssertsState,
   repo: string,
   name: string,
+  installed: ShellAssert | PresetAssert,
 ): void {
   let removed: boolean;
   try {
-    removed = removeRule(ctx.cwd, repo, name);
+    if (!installed.path) throw new Error(`entry "${name}" has no owning file`);
+    removed = removeRuleAt(installed.path, repo, name);
   } catch (err) {
     ctx.ui.notify(
       `pi-assert: failed to remove "${name}" — ${String(err)}`,
@@ -469,12 +454,12 @@ export async function runInstallWizard(
       const entryState = classifyEntry(repoEntry, installed);
 
       if (entryState === "not-installed") {
-        installAndReload(ctx, state, repo, name, repoEntry);
+        await installAndReload(ctx, state, repo, name, repoEntry);
       } else if (entryState === "outdated") {
         updateAndReload(ctx, state, name, repoEntry, installed!);
       } else {
         // "installed" → uninstall
-        removeAndReload(ctx, state, repo, name);
+        removeAndReload(ctx, state, repo, name, installed!);
       }
 
       index = result.index;

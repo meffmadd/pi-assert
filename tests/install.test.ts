@@ -750,6 +750,11 @@ describe("installRule", () => {
         mkdirSync(cwd, { recursive: true });
       }
 
+      if (label === "handles broken existing JSON (starts fresh)") {
+        assert.throws(() => installRule(cwd, repo, name, entry));
+        assert.equal(readFileSync(join(cwd, ".pi", "asserts.json"), "utf-8"), "{not valid json!!!");
+        return;
+      }
       installRule(cwd, repo, name, entry);
 
       const raw = readFileSync(join(cwd, ".pi", "asserts.json"), "utf-8");
@@ -860,6 +865,11 @@ describe("removeRule", () => {
         writeFileSync(join(cwd, ".pi", "asserts.json"), JSON.stringify(initialJson));
       }
 
+      if (label === "returns false on broken JSON") {
+        assert.throws(() => removeRule(cwd, repo, name));
+        assert.equal(readFileSync(join(cwd, ".pi", "asserts.json"), "utf-8"), "not json!!!");
+        return;
+      }
       const result = removeRule(cwd, repo, name);
       assert.strictEqual(result, expectedResult);
 

@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { AssertsState } from "./ui/state.js";
 import { registerAssertsCommand } from "./ui/asserts.js";
+import { clearRepoEntriesCache } from "./installer.js";
 import {
   executeAgentEndAsserts,
   executeToolCallAsserts,
@@ -22,6 +23,8 @@ export default function (pi: ExtensionAPI) {
 
   // ── Load asserts on session start ─────────────────────────────────
   pi.on("session_start", (_event, ctx) => {
+    // The repo-entry cache is intentionally scoped to a Pi session.
+    clearRepoEntriesCache();
     state.load(ctx.cwd);
 
     // Hard-fail: if either asserts.json file failed to parse, do NOT restore

@@ -70,6 +70,22 @@ const defaultCtx: ExtensionContext = { cwd: "/tmp" };
 describe("e2e: orchestration", () => {
   // 5.1 ── No asserts → all tools allowed ──────────────────────────
 
+  it("uses the event toolName when input attempts to shadow it", async () => {
+    const asserts: Assert[] = [{
+      name: "guard-bash",
+      source: "local",
+      description: "d",
+      hook: "tool_call",
+      filter: { toolName: "bash" },
+      shell: "false",
+      default: false,
+    }];
+    const result = await runAsserts(asserts, {
+      toolName: "bash", toolCallId: "shadow", input: { toolName: "write" },
+    }, defaultCtx);
+    assert.ok(result?.block);
+  });
+
   it("no asserts loaded → all tools allowed", async () => {
     const cwd = setupConfig("e2e-empty", {});
     const asserts = loadAsserts(cwd);

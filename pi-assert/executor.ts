@@ -83,12 +83,19 @@ async function runAsserts<Evt, T>(
     const env = opts.buildEnv(event, ctx);
 
     if (assert.when) {
-      const precondition = await evaluateShell(assert.when, env, ctx.signal);
+      const precondition = await evaluateShell(assert.when, env, ctx.signal, undefined, ctx.cwd);
+      // Non-zero means "not applicable"; null means timeout, abort, or a
+      // spawn failure and must not bypass a guard.
+      if (precondition.code === null) {
+        const decision = opts.onFail(assert, precondition);
+        if (decision !== "continue") return decision.value;
+        continue;
+      }
       if (!precondition.passed) continue;
     }
 
     const t0 = Date.now();
-    const result = await evaluateShell(assert.shell, env, ctx.signal);
+    const result = await evaluateShell(assert.shell, env, ctx.signal, undefined, ctx.cwd);
     const elapsed = Date.now() - t0;
     opts.onRun?.({
       name: assert.name,
@@ -118,7 +125,7 @@ export async function executeToolCallAsserts(
 ): Promise<{ block: true; reason: string } | undefined> {
   return runAsserts(asserts, event, ctx, {
     hook: "tool_call",
-    candidate: { toolName: event.toolName, ...event.input },
+    candidate: { ...event.input, toolName: event.toolName },
     buildEnv: buildEnv,
     onFail: (assert) => ({
       value: {
@@ -146,7 +153,7 @@ export async function executeToolResultAsserts(
 ): Promise<{ patch: ToolResultPatch; reason: string } | undefined> {
   return runAsserts(asserts, event, ctx, {
     hook: "tool_result",
-    candidate: { toolName: event.toolName, ...event.input },
+    candidate: { ...event.input, toolName: event.toolName },
     buildEnv: buildResultEnv,
     onFail: (assert) => ({
       value: {

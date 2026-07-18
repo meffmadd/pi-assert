@@ -71,6 +71,27 @@ describe("activeList — shell asserts", () => {
   });
 });
 
+describe("activeList — source-qualified activation", () => {
+  it("enables same-named entries independently", () => {
+    const state = makeState(
+      [shell("local", "guard"), shell("owner/repo", "guard")],
+      new Set(["local\x00guard"]),
+    );
+    assert.deepEqual(
+      state.activeList().map((a) => `${a.source}/${a.name}`),
+      ["local/guard"],
+    );
+  });
+
+  it("does not migrate an ambiguous legacy bare name", () => {
+    const state = makeState(
+      [shell("local", "guard"), shell("owner/repo", "guard")],
+      new Set(["guard"]),
+    );
+    assert.deepEqual(state.activeList(), []);
+  });
+});
+
 describe("activeList — preset expansion", () => {
   it("expands a local/name ref to the referenced shell assert", () => {
     const state = makeState(

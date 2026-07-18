@@ -8,6 +8,8 @@ import {
   readSectionedFile,
   validateEntryShape,
   validatePresetShape,
+  validateSectionedFile,
+  entryKey,
   type SectionedFile,
 } from "./config.js";
 
@@ -274,7 +276,7 @@ function upsertError(errors: LoadError[], next: LoadError): void {
 }
 
 function keyOf(a: Assert): string {
-  return `${a.source}\x00${a.name}`;
+  return entryKey(a.source, a.name);
 }
 
 /**
@@ -293,6 +295,8 @@ function readSections(
   knownRepos?: Set<string>,
 ): Assert[] {
   const file: SectionedFile = readSectionedFile(path);
+  const validationError = validateSectionedFile(file);
+  if (validationError) throw new Error(validationError);
   const results: Assert[] = [];
 
   for (const { source, entries } of iterSections(file, knownRepos)) {
@@ -490,15 +494,17 @@ export function evaluateShell(
   env: Record<string, string>,
   signal?: AbortSignal,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  cwd?: string,
 ): Promise<ShellResult> {
   return new Promise<ShellResult>((resolve, _reject) => {
     // Merge our env on top of process.env so the shell inherits PATH etc.
-    const mergedEnv = { ...process.env, ...env };
+    const mergedEnv = { ...process.env, ...env, ...(cwd ? { PWD: cwd } : {}) };
 
     const child = exec(shell, {
       env: mergedEnv,
       timeout: timeoutMs,
       signal,
+      cwd,
       // shell: defaults to /bin/sh on Unix, which is what we want
     });
 

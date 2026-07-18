@@ -6,6 +6,9 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { evaluateShell } from "../pi-assert/engine.js";
 
@@ -18,6 +21,18 @@ const env = { PI_TOOL_NAME: "bash" };
 // ═══════════════════════════════════════════════════════════════════
 
 describe("evaluateShell", () => {
+  it("runs with the supplied project cwd", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-assert-cwd-"));
+    try {
+      const result = await evaluateShell(
+        'test "$PWD" = "$PI_CWD"', { PI_CWD: cwd }, undefined, undefined, cwd,
+      );
+      assert.ok(result.passed);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   // ── Exit codes ──────────────────────────────────────────────────
 
   describe("exit codes", () => {

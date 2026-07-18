@@ -184,11 +184,9 @@ describe("readSectionedFile", () => {
     assert.throws(() => readSectionedFile(path));
   });
 
-  it("does not throw on non-object JSON (arrays yield no sections, matching runtime)", () => {
+  it("rejects a top-level JSON array", () => {
     const path = writeTmp("array.json", "[1,2,3]");
-    const file = readSectionedFile(path);
-    // iterSections skips non-object top-level values, so an array yields [].
-    assert.deepEqual(iterSections(file), []);
+    assert.throws(() => readSectionedFile(path), /JSON object/);
   });
 });
 
@@ -346,15 +344,10 @@ describe("validateRuleEntry", () => {
     assert.equal(validateRuleEntry(null), null);
   });
 
-  it("classifies a both-fields entry as assert (preset guard rejects shell-bearing entries)", () => {
-    // An entry with BOTH shell+hook and preset fails validatePresetShape (has
-    // shell → mutual-exclusivity reject), so it falls through to the assert
-    // guard, which accepts it (description/hook/shell present).  Such an entry
-    // is rejected by the schema's oneOf before it reaches disk; the tag here
-    // just reflects which guard matched.
-    assert.deepEqual(
+  it("rejects an entry carrying both assert and preset fields", () => {
+    assert.equal(
       validateRuleEntry({ description: "d", hook: "tool_call", shell: "false", preset: ["local/a"] }),
-      { kind: "assert" },
+      null,
     );
   });
 });

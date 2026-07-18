@@ -245,27 +245,16 @@ export function clearRepoEntriesCache(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Best-effort project-file read: returns `{}` when the file is missing or
- * unparseable (matches the historical install/remove behaviour — install
- * should create the file, remove should no-op, never throw on a broken
- * config).  The runtime loader (`engine.ts`) instead uses `readSectionedFile`
- * directly so it can surface parse errors.
+ * Read a mutable config. Missing files are empty; existing malformed or
+ * unreadable files throw so a UI action can report the problem without ever
+ * replacing the user's bytes.
  */
 function readProjectFile(cwd: string): SectionedFile {
-  try {
-    return readSectionedFile(projectFilePath(cwd));
-  } catch {
-    return {};
-  }
+  return readSectionedFile(projectFilePath(cwd));
 }
 
-/** Best-effort path-based read (for `setAssertDefault`, which takes a path). */
 function readProjectFileAt(path: string): SectionedFile {
-  try {
-    return readSectionedFile(path);
-  } catch {
-    return {};
-  }
+  return readSectionedFile(path);
 }
 
 function writeProjectFile(cwd: string, data: SectionedFile): void {
@@ -464,7 +453,7 @@ export function classifyEntry(
  * Path-aware core: {@link removeRule} delegates here on the project file
  * (`projectFilePath(cwd)`).
  */
-function removeRuleAt(
+export function removeRuleAt(
   path: string,
   source: string,
   name: string,
